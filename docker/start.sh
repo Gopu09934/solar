@@ -252,7 +252,7 @@ trap 'kill "$CLOCK_PID" 2>/dev/null || true; [ -n "$SUBS_PID" ] && kill "$SUBS_P
 printf 'S O L A R   D Y N A M I C S'        > "$ASSET_DIR/title1.txt"
 printf 'O B S E R V A T O R Y'              > "$ASSET_DIR/title2.txt"
 printf "T O D A Y ' S   S O L A R   S T O R Y" > "$ASSET_DIR/header.txt"
-printf 'SDO SOLAR OBSERVATION'                      > "$ASSET_DIR/eyebrow.txt"
+printf 'LIVE FROM SDO'                      > "$ASSET_DIR/eyebrow.txt"
 printf 'SUBSCRIBE for the Sun, live 24/7'   > "$ASSET_DIR/cta.txt"
 printf 'DID YOU KNOW'                       > "$ASSET_DIR/fact_label.txt"
 printf 'INSTRUMENT'                         > "$ASSET_DIR/instr_label.txt"
