@@ -606,7 +606,7 @@ prepare_video_content() {
     # black bars, at the cost of a modest side crop.
     CHAIN="color=c=black:s=1280x720[canvas];"
     CHAIN+="[0:v]scale=${CENTER_W}:720:force_original_aspect_ratio=increase,crop=${CENTER_W}:720[vidfit];"
-    CHAIN+="[canvas][vidfit]overlay=${CENTER_X0}:0[base];"
+    CHAIN+="[canvas][vidfit]overlay=${CENTER_X0}:0:shortest=1[base];"
 
     # Optional coordinate-based callout labels for this video, drawn
     # onto the Sun before the panels so the panels stay on top.
