@@ -12,6 +12,13 @@ if [ -z "${YOUTUBE_STREAM_KEY:-}" ]; then
     echo "ERROR: YOUTUBE_STREAM_KEY is not set"
     exit 1
 fi
+if [ -z "${AUDIO_URL:-}" ]; then
+    echo "ERROR: AUDIO_URL is not set"
+    echo "The video sources have no audio track, so AUDIO_URL (one or more"
+    echo "background music/ambience files) is required. Same format as"
+    echo "VIDEO_URL — comma-separated for multiple tracks: url1,url2,url3"
+    exit 1
+fi
 
 # Subscriber count + live viewer count are optional — if the API creds
 # aren't provided, those panel elements just stay blank instead of
@@ -66,15 +73,6 @@ PANEL_TEXT_W=$((PANEL_W - 66))         # usable text width inside a panel
 # visitor than showing nothing at all. Raise/lower to taste.
 VIEWER_MIN_TO_SHOW=10
 
-# Approximate center + radius (in 1280x720 output coordinates) of the
-# subscribe icon baked into overlay.png, used to draw a pulsing gold
-# ring around it every few seconds so it catches the eye. Defaults sit
-# inside the right-hand info panel's lower area — adjust to match the
-# icon's actual position in your overlay.png.
-SUB_ICON_X=1249
-SUB_ICON_Y=677
-SUB_ICON_R=20
-
 #############################################
 # Up-next bumper (shown between videos)
 #############################################
@@ -100,6 +98,76 @@ MAX_RETRIES=5       # per-video retry attempts before moving on
 RETRY_DELAY=5        # seconds between retries
 
 mkdir -p "$ASSET_DIR"
+
+#############################################
+# Background audio (single track, looped)
+#
+# The source video has no audio, so one shared
+# music/ambience track is downloaded ONCE here
+# and looped locally (via -stream_loop -1) under
+# every video segment and every bumper. Because
+# each video is streamed by its own separate
+# ffmpeg process (see run_video), the track
+# restarts from its beginning at the start of
+# each new video/bumper rather than staying at a
+# single continuous playhead across the whole
+# 24 hours — it always loops, just per-segment.
+#
+# Downloaded once (not re-fetched per video) so
+# a flaky/slow AUDIO_URL host can't stall every
+# single video transition, and so -stream_loop
+# is looping a local file instead of repeatedly
+# re-requesting a remote URL every time it repeats.
+#############################################
+#############################################
+# Background audio (one or more tracks, looped)
+#
+# The source video has no audio, so shared
+# music/ambience tracks are downloaded ONCE here
+# (same comma-separated format as VIDEO_URL) and
+# rotated across videos — each video picks the
+# next track in the list and loops it locally
+# (via -stream_loop -1) for its own duration.
+# Because each video is streamed by its own
+# separate ffmpeg process (see run_video), a
+# track always restarts from its beginning at
+# the start of whichever video/bumper it's
+# assigned to, rather than playing as one
+# continuous playhead across the whole 24 hours.
+#
+# Downloaded once (not re-fetched per video) so
+# a flaky/slow AUDIO_URL host can't stall video
+# transitions, and so -stream_loop is looping
+# local files instead of repeatedly re-requesting
+# a remote URL every time it repeats.
+#############################################
+IFS=',' read -ra RAW_AUDIO_URLS <<< "$AUDIO_URL"
+AUDIO_LOCAL_FILES=()
+audio_i=0
+for au in "${RAW_AUDIO_URLS[@]}"; do
+    au="${au#"${au%%[![:space:]]*}"}"
+    au="${au%"${au##*[![:space:]]}"}"
+    [ -z "$au" ] && continue
+    audio_i=$((audio_i + 1))
+    dest="bg_audio_track_${audio_i}"
+    echo "Downloading background audio track ${audio_i}..."
+    if curl -sL --fail -o "$dest" "$au" && [ -s "$dest" ]; then
+        AUDIO_LOCAL_FILES+=("$dest")
+        echo "  OK ($(du -h "$dest" | cut -f1))"
+    else
+        echo "  WARNING: failed to download track ${audio_i} — skipping it."
+    fi
+done
+
+NUM_AUDIO=${#AUDIO_LOCAL_FILES[@]}
+AUDIO_AVAILABLE=false
+if [ "$NUM_AUDIO" -gt 0 ]; then
+    AUDIO_AVAILABLE=true
+    echo "Loaded $NUM_AUDIO background audio track(s); rotating across videos."
+else
+    echo "WARNING: no background audio tracks downloaded — stream will run with silent audio instead."
+fi
+AUDIO_COUNTER=0   # persists across the whole run; advances one track per video/bumper
 
 #############################################
 # Generate the coordinate-label marker dot once
@@ -360,7 +428,7 @@ build_labels_chain() {
 
     local split_outs=""
     for ((i = 1; i <= n; i++)); do split_outs+="[dm${i}]"; done
-    LABELS_CHAIN+="[2:v]split=${n}${split_outs};"
+    LABELS_CHAIN+="[1:v]split=${n}${split_outs};"
 
     local prev="base"
     for ((i = 0; i < n; i++)); do
@@ -715,25 +783,7 @@ build_final_filter() {
     tail+="[tk4]drawbox=x=0:y=682:w=113:h=38:color=${GOLD}:t=fill[tk5];"
     tail+="[tk5]drawtext=fontfile=${FONT}:text='LIVE NOW':fontcolor=black:fontsize=15:x=13:y=695[tk6];"
 
-    tail+="[tk6]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.45:fontsize=14:borderw=1.5:bordercolor=black@0.7:x=(w-text_w)/2:y=657[wm1];"
-
-    # Pulsing ring around the subscribe icon (baked into overlay.png at
-    # SUB_ICON_X/SUB_ICON_Y, expected inside the right panel) — visible
-    # for 1s out of every 3s so it catches the eye without nagging.
-    local SUB_PULSE_ENABLE="lt(mod(t\,3)\,1)"
-    local sub_ring_x=$((SUB_ICON_X - SUB_ICON_R))
-    local sub_ring_y=$((SUB_ICON_Y - SUB_ICON_R))
-    local sub_ring_d=$((SUB_ICON_R * 2))
-    tail+="[wm1]drawbox=x=${sub_ring_x}:y=${sub_ring_y}:w=${sub_ring_d}:h=${sub_ring_d}:color=${GOLD}@0.9:t=3:enable='${SUB_PULSE_ENABLE}'[wm2];"
-
-    # overlay.png carries any extra branding art (e.g. a subscribe-button
-    # graphic or logo) and is drawn last, on top of everything. Unlike
-    # the original design there's no full-frame darkening pass here —
-    # the Sun itself is the visual, and it no longer needs to be dimmed
-    # to keep panel text readable since the panels have their own solid
-    # backgrounds now.
-    tail+="[1:v]scale=1280:720:flags=fast_bilinear[ovl];"
-    tail+="[wm2][ovl]overlay=0:0[final]"
+    tail+="[tk6]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.45:fontsize=14:borderw=1.5:bordercolor=black@0.7:x=(w-text_w)/2:y=657[final]"
 
     echo "$tail"
 }
@@ -770,9 +820,8 @@ run_bumper() {
     fade_out_start=$(awk -v d="$BUMPER_DURATION" 'BEGIN{print d - 0.6}')
 
     local BFILTER
-    BFILTER="[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720[bg];"
-    BFILTER+="[bg]drawbox=x=0:y=0:w=1280:h=720:color=black@0.55:t=fill[b1];"
-    BFILTER+="[b1]drawbox=x=27:y=28:w=11:h=11:color=${RED}:t=fill:enable='lt(mod(t\,1)\,0.6)'[b2];"
+    BFILTER="color=c=0x0a0a0f:s=1280x720[bg];"
+    BFILTER+="[bg]drawbox=x=27:y=28:w=11:h=11:color=${RED}:t=fill:enable='lt(mod(t\,1)\,0.6)'[b2];"
     BFILTER+="[b2]drawtext=fontfile=${FONT}:text='LIVE':fontcolor=white:fontsize=30:x=44:y=19[b3];"
     BFILTER+="[b3]drawbox=x=0:y=313:w=1280:h=2:color=${GOLD}@0.8:t=fill[b4];"
     BFILTER+="[b4]drawtext=fontfile=${FONT}:text='UP NEXT':fontcolor=${GOLD}:fontsize=22:x=(w-text_w)/2:y=260[b5];"
@@ -781,14 +830,22 @@ run_bumper() {
     BFILTER+="[b7]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.4:fontsize=14:x=(w-text_w)/2:y=470[b8];"
     BFILTER+="[b8]fade=t=in:st=0:d=0.5,fade=t=out:st=${fade_out_start}:d=0.6[final]"
 
+    local BUMPER_AUDIO_INPUT_ARGS=()
+    if [ "$AUDIO_AVAILABLE" = true ]; then
+        local this_audio="${AUDIO_LOCAL_FILES[$((AUDIO_COUNTER % NUM_AUDIO))]}"
+        AUDIO_COUNTER=$((AUDIO_COUNTER + 1))
+        BUMPER_AUDIO_INPUT_ARGS=(-stream_loop -1 -t "$BUMPER_DURATION" -i "$this_audio")
+    else
+        BUMPER_AUDIO_INPUT_ARGS=(-f lavfi -t "$BUMPER_DURATION" -i "anullsrc=r=48000:cl=stereo")
+    fi
+
     ffmpeg \
     -hide_banner \
     -loglevel warning \
-    -loop 1 -t "$BUMPER_DURATION" -i overlay.png \
-    -f lavfi -t "$BUMPER_DURATION" -i anullsrc=r=48000:cl=stereo \
+    "${BUMPER_AUDIO_INPUT_ARGS[@]}" \
     -filter_complex "$BFILTER" \
     -map "[final]" \
-    -map 1:a \
+    -map 0:a \
     -r 24 \
     -s 1280x720 \
     -c:v libx264 \
@@ -836,6 +893,19 @@ run_video() {
     local filter
     filter=$(build_final_filter "$duration")
 
+    # Audio input for this segment: the next track in rotation, looped
+    # locally, or a silent fallback if no tracks downloaded at startup.
+    local AUDIO_INPUT_ARGS=()
+    local AUDIO_MAP="2:a"
+    if [ "$AUDIO_AVAILABLE" = true ]; then
+        local this_audio="${AUDIO_LOCAL_FILES[$((AUDIO_COUNTER % NUM_AUDIO))]}"
+        AUDIO_COUNTER=$((AUDIO_COUNTER + 1))
+        echo "Background audio for this video: $this_audio"
+        AUDIO_INPUT_ARGS=(-stream_loop -1 -i "$this_audio")
+    else
+        AUDIO_INPUT_ARGS=(-f lavfi -i "anullsrc=r=48000:cl=stereo")
+    fi
+
     while [ "$attempt" -le "$MAX_RETRIES" ]; do
         echo "----------------------------------------"
         echo "Streaming (attempt ${attempt}/${MAX_RETRIES}):"
@@ -851,11 +921,11 @@ run_video() {
         -reconnect_delay_max 5 \
         -re \
         -i "$url" \
-        -loop 1 -i overlay.png \
         -loop 1 -i "$DOT_MARKER" \
+        "${AUDIO_INPUT_ARGS[@]}" \
         -filter_complex "$filter" \
         -map "[final]" \
-        -map 0:a? \
+        -map "$AUDIO_MAP" \
         -r 30 \
         -s 1280x720 \
         -c:v libx264 \
