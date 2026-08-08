@@ -73,23 +73,6 @@ PANEL_TEXT_W=$((PANEL_W - 66))         # usable text width inside a panel
 # visitor than showing nothing at all. Raise/lower to taste.
 VIEWER_MIN_TO_SHOW=10
 
-#############################################
-# Up-next bumper (shown between videos)
-#############################################
-ENABLE_BUMPER=true
-BUMPER_DURATION=5   # seconds
-BUMPER_MESSAGES=(
-    "Stay tuned for more real-time views of our nearest star."
-    "The Solar Dynamics Observatory keeps watch around the clock."
-    "Our live look at the Sun continues in just a moment."
-    "Active regions, flares, and prominences — coming right up."
-    "More footage from the Sun's turbulent atmosphere in a moment."
-    "Watch the Sun breathe through the eyes of SDO."
-    "Every frame brings us closer to understanding our star."
-    "Prepare for another close-up look at solar activity."
-    "New views of the Sun's surface are just ahead."
-    "Thank you for watching the Sun with us. More is coming soon."
-)
 
 #############################################
 # Auto-restart on failure
@@ -99,26 +82,6 @@ RETRY_DELAY=5        # seconds between retries
 
 mkdir -p "$ASSET_DIR"
 
-#############################################
-# Background audio (single track, looped)
-#
-# The source video has no audio, so one shared
-# music/ambience track is downloaded ONCE here
-# and looped locally (via -stream_loop -1) under
-# every video segment and every bumper. Because
-# each video is streamed by its own separate
-# ffmpeg process (see run_video), the track
-# restarts from its beginning at the start of
-# each new video/bumper rather than staying at a
-# single continuous playhead across the whole
-# 24 hours — it always loops, just per-segment.
-#
-# Downloaded once (not re-fetched per video) so
-# a flaky/slow AUDIO_URL host can't stall every
-# single video transition, and so -stream_loop
-# is looping a local file instead of repeatedly
-# re-requesting a remote URL every time it repeats.
-#############################################
 #############################################
 # Background audio (one or more tracks, looped)
 #
@@ -131,9 +94,9 @@ mkdir -p "$ASSET_DIR"
 # Because each video is streamed by its own
 # separate ffmpeg process (see run_video), a
 # track always restarts from its beginning at
-# the start of whichever video/bumper it's
-# assigned to, rather than playing as one
-# continuous playhead across the whole 24 hours.
+# the start of whichever video it's assigned to,
+# rather than playing as one continuous playhead
+# across the whole 24 hours.
 #
 # Downloaded once (not re-fetched per video) so
 # a flaky/slow AUDIO_URL host can't stall video
@@ -167,7 +130,7 @@ if [ "$NUM_AUDIO" -gt 0 ]; then
 else
     echo "WARNING: no background audio tracks downloaded — stream will run with silent audio instead."
 fi
-AUDIO_COUNTER=0   # persists across the whole run; advances one track per video/bumper
+AUDIO_COUNTER=0   # persists across the whole run; advances one track per video
 
 #############################################
 # Generate the coordinate-label marker dot once
@@ -289,7 +252,7 @@ trap 'kill "$CLOCK_PID" 2>/dev/null || true; [ -n "$SUBS_PID" ] && kill "$SUBS_P
 printf 'S O L A R   D Y N A M I C S'        > "$ASSET_DIR/title1.txt"
 printf 'O B S E R V A T O R Y'              > "$ASSET_DIR/title2.txt"
 printf "T O D A Y ' S   S O L A R   S T O R Y" > "$ASSET_DIR/header.txt"
-printf 'LIVE FROM SDO'                      > "$ASSET_DIR/eyebrow.txt"
+printf 'SDO SOLAR OBSERVATION'                      > "$ASSET_DIR/eyebrow.txt"
 printf 'SUBSCRIBE for the Sun, live 24/7'   > "$ASSET_DIR/cta.txt"
 printf 'DID YOU KNOW'                       > "$ASSET_DIR/fact_label.txt"
 printf 'INSTRUMENT'                         > "$ASSET_DIR/instr_label.txt"
@@ -789,86 +752,6 @@ build_final_filter() {
 }
 
 #############################################
-# Up-next bumper: short branded title card
-# streamed between videos to reduce drop-off
-# at the loop/transition point.
-#############################################
-run_bumper() {
-    local next_url="$1"
-
-    local raw title
-    raw="${next_url##*/}"
-    raw="${raw%.*}"
-    raw="${raw//[-_]/ }"
-    raw="$(echo "$raw" | tr -d '[:space:]')"
-    if [ -z "$raw" ] || [ ${#raw} -lt 3 ]; then
-        title="A New Look at the Sun"
-    else
-        raw="${next_url##*/}"
-        raw="${raw%.*}"
-        raw="${raw//[-_]/ }"
-        title=$(echo "$raw" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2); print}')
-    fi
-
-    local sub_idx=$((RANDOM % ${#BUMPER_MESSAGES[@]}))
-    printf '%s' "$title" | fold -s -w 34 > "$ASSET_DIR/bumper_title.txt"
-    printf '%s' "${BUMPER_MESSAGES[$sub_idx]}" > "$ASSET_DIR/bumper_sub.txt"
-
-    echo ">>> Up next: $title"
-
-    local fade_out_start
-    fade_out_start=$(awk -v d="$BUMPER_DURATION" 'BEGIN{print d - 0.6}')
-
-    local BFILTER
-    BFILTER="color=c=0x0a0a0f:s=1280x720[bg];"
-    BFILTER+="[bg]drawbox=x=27:y=28:w=11:h=11:color=${RED}:t=fill:enable='lt(mod(t\,1)\,0.6)'[b2];"
-    BFILTER+="[b2]drawtext=fontfile=${FONT}:text='LIVE':fontcolor=white:fontsize=30:x=44:y=19[b3];"
-    BFILTER+="[b3]drawbox=x=0:y=313:w=1280:h=2:color=${GOLD}@0.8:t=fill[b4];"
-    BFILTER+="[b4]drawtext=fontfile=${FONT}:text='UP NEXT':fontcolor=${GOLD}:fontsize=22:x=(w-text_w)/2:y=260[b5];"
-    BFILTER+="[b5]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/bumper_title.txt:fontcolor=white:fontsize=36:line_spacing=8:x=(w-text_w)/2:y=347:${SHADOW}[b6];"
-    BFILTER+="[b6]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/bumper_sub.txt:fontcolor=white@0.75:fontsize=18:x=(w-text_w)/2:y=427[b7];"
-    BFILTER+="[b7]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.4:fontsize=14:x=(w-text_w)/2:y=470[b8];"
-    BFILTER+="[b8]fade=t=in:st=0:d=0.5,fade=t=out:st=${fade_out_start}:d=0.6[final]"
-
-    local BUMPER_AUDIO_INPUT_ARGS=()
-    if [ "$AUDIO_AVAILABLE" = true ]; then
-        local this_audio="${AUDIO_LOCAL_FILES[$((AUDIO_COUNTER % NUM_AUDIO))]}"
-        AUDIO_COUNTER=$((AUDIO_COUNTER + 1))
-        BUMPER_AUDIO_INPUT_ARGS=(-stream_loop -1 -t "$BUMPER_DURATION" -i "$this_audio")
-    else
-        BUMPER_AUDIO_INPUT_ARGS=(-f lavfi -t "$BUMPER_DURATION" -i "anullsrc=r=48000:cl=stereo")
-    fi
-
-    ffmpeg \
-    -hide_banner \
-    -loglevel warning \
-    "${BUMPER_AUDIO_INPUT_ARGS[@]}" \
-    -filter_complex "$BFILTER" \
-    -map "[final]" \
-    -map 0:a \
-    -r 24 \
-    -s 1280x720 \
-    -c:v libx264 \
-    -preset ultrafast \
-    -tune zerolatency \
-    -threads 2 \
-    -profile:v high \
-    -level 4.1 \
-    -pix_fmt yuv420p \
-    -b:v 3000k \
-    -maxrate 3000k \
-    -bufsize 6000k \
-    -g 60 \
-    -keyint_min 60 \
-    -sc_threshold 0 \
-    -c:a aac \
-    -b:a 128k \
-    -ar 48000 \
-    -ac 2 \
-    -f flv \
-    "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY}" || echo "WARNING: bumper failed, continuing to next video"
-}
-
 #############################################
 # Stream one video with automatic retry on
 # failure/crash (e.g. Bus error, network drop),
@@ -997,14 +880,8 @@ fi
 while true; do
     for ((i = 0; i < NUM_URLS; i++)); do
         url="${URLS[$i]}"
-        next_idx=$(( (i + 1) % NUM_URLS ))
-        next_url="${URLS[$next_idx]}"
 
         run_video "$url"
-
-        if [ "$ENABLE_BUMPER" = true ]; then
-            run_bumper "$next_url"
-        fi
 
         echo "Loading next video..."
         echo ""
