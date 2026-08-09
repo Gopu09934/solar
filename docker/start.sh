@@ -182,6 +182,37 @@ else
 fi
 
 #############################################
+# Live "time until totality" countdown writer.
+# Pure local date-math — no API needed, unlike
+# the subs/viewers writers. Target is the moment
+# of greatest eclipse for the Aug 12, 2026 total
+# solar eclipse: 17:47:06 UTC.
+# Updates every 30s; ffmpeg re-reads the file via
+# reload=1 (same pattern as clock.txt / subs.txt).
+# Once the target has passed, switches the panel
+# to a "LIVE NOW" message instead of going negative.
+#############################################
+EVENT_COUNTDOWN_TARGET_EPOCH=$(date -u -d "2026-08-12 17:47:06" +%s)
+printf ' ' > "$ASSET_DIR/countdown.txt"
+(
+    while true; do
+        NOW_EPOCH=$(date -u +%s)
+        REMAIN=$((EVENT_COUNTDOWN_TARGET_EPOCH - NOW_EPOCH))
+        if [ "$REMAIN" -le 0 ]; then
+            printf 'TOTALITY IS LIVE NOW' > "$ASSET_DIR/countdown.txt.tmp"
+        else
+            CD_DAYS=$((REMAIN / 86400))
+            CD_HOURS=$(((REMAIN % 86400) / 3600))
+            CD_MINS=$(((REMAIN % 3600) / 60))
+            printf '%dD  %02dH  %02dM LEFT' "$CD_DAYS" "$CD_HOURS" "$CD_MINS" > "$ASSET_DIR/countdown.txt.tmp"
+        fi
+        mv -f "$ASSET_DIR/countdown.txt.tmp" "$ASSET_DIR/countdown.txt"
+        sleep 30
+    done
+) &
+COUNTDOWN_PID=$!
+
+#############################################
 # Background clock writer (avoids fragile
 # drawtext %{gmtime} expansion syntax)
 #############################################
@@ -268,7 +299,7 @@ if [ "$SHOW_STATS" = true ]; then
     VIEWERS_PID=$!
 fi
 
-trap 'kill "$CLOCK_PID" 2>/dev/null || true; [ -n "$SUBS_PID" ] && kill "$SUBS_PID" 2>/dev/null || true; [ -n "$VIEWERS_PID" ] && kill "$VIEWERS_PID" 2>/dev/null || true' EXIT
+trap 'kill "$CLOCK_PID" 2>/dev/null || true; [ -n "$SUBS_PID" ] && kill "$SUBS_PID" 2>/dev/null || true; [ -n "$VIEWERS_PID" ] && kill "$VIEWERS_PID" 2>/dev/null || true; kill "$COUNTDOWN_PID" 2>/dev/null || true' EXIT
 
 #############################################
 # Static panel text (unchanged across videos)
@@ -283,7 +314,8 @@ printf 'INSTRUMENT'                         > "$ASSET_DIR/instr_label.txt"
 printf 'SDO · AIA'                          > "$ASSET_DIR/instr_title.txt"
 printf 'TRENDING NOW'                       > "$ASSET_DIR/trend_label.txt"
 printf 'TOTAL SOLAR ECLIPSE'                > "$ASSET_DIR/trend_title.txt"
-printf 'Aug 12, 2026 — path crosses Greenland, Iceland & Spain' | fold -s -w 30 > "$ASSET_DIR/trend_sub.txt"
+printf 'Greenland · Iceland · Spain'        > "$ASSET_DIR/trend_sub.txt"
+printf 'COUNTDOWN TO TOTALITY'              > "$ASSET_DIR/countdown_label.txt"
 
 #############################################
 # Default headline / fact pools (used as a
@@ -712,19 +744,21 @@ prepare_video_content() {
     # The block's total height depends on how many lines the current
     # headline wrapped to (DOTS_Y shifts with it), so the image height
     # is computed to fit — never a fixed value — reserving TREND_TEXT_H
-    # below the image for the title + a 2-line caption, and keeping the
-    # whole thing above TREND_MAX_BOTTOM (comfortably clear of the
-    # bottom ticker bar, which starts at y=680). This is what was
-    # broken before: a fixed 150px image height could push the title
-    # and caption text down into the ticker's y=680-720 band, where the
-    # ticker's opaque background (drawn later, on top) hid them.
-    local TREND_TEXT_H=64
-    local TREND_MAX_BOTTOM=668
+    # below the image for the title + caption + countdown row, and
+    # keeping the whole thing above TREND_MAX_BOTTOM (comfortably clear
+    # of the bottom ticker bar, which starts at y=680). This is what
+    # broke before: a fixed image height could push text down into the
+    # ticker's y=680-720 band, where the ticker's opaque background
+    # (drawn later, on top) hid it.
+    local TREND_TEXT_H=88
+    local TREND_MAX_BOTTOM=670
     local TREND_IMG_H=$((TREND_MAX_BOTTOM - TREND_IMG_Y - TREND_TEXT_H))
-    [ "$TREND_IMG_H" -gt 130 ] && TREND_IMG_H=130
-    [ "$TREND_IMG_H" -lt 50 ] && TREND_IMG_H=50
+    [ "$TREND_IMG_H" -gt 120 ] && TREND_IMG_H=120
+    [ "$TREND_IMG_H" -lt 40 ] && TREND_IMG_H=40
     local TREND_TITLE_Y=$((TREND_IMG_Y + TREND_IMG_H + 8))
-    local TREND_SUB_Y=$((TREND_TITLE_Y + 22))
+    local TREND_SUB_Y=$((TREND_TITLE_Y + 24))
+    local TREND_CD_LABEL_Y=$((TREND_SUB_Y + 22))
+    local TREND_CD_VALUE_Y=$((TREND_CD_LABEL_Y + 15))
 
     CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 2)):y=$((TREND_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[tr1];"
     CHAIN+="[tr1]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_label.txt:fontcolor=white@0.55:fontsize=11:x=$((TEXT_INSET + 14)):y=$((TREND_LABEL_Y - 8))[tr2];"
@@ -738,7 +772,9 @@ prepare_video_content() {
     fi
 
     CHAIN+="[${prev}]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_title.txt:fontcolor=${GOLD}:fontsize=18:x=${TEXT_INSET}:y=${TREND_TITLE_Y}:${SHADOW}[tr5];"
-    CHAIN+="[tr5]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_sub.txt:fontcolor=white@0.8:fontsize=13:line_spacing=5:x=${TEXT_INSET}:y=${TREND_SUB_Y}[trend_out];"
+    CHAIN+="[tr5]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_sub.txt:fontcolor=white@0.8:fontsize=13:x=${TEXT_INSET}:y=${TREND_SUB_Y}[tr6];"
+    CHAIN+="[tr6]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/countdown_label.txt:fontcolor=white@0.45:fontsize=10:x=${TEXT_INSET}:y=${TREND_CD_LABEL_Y}[tr7];"
+    CHAIN+="[tr7]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/countdown.txt:reload=1:fontcolor=${GOLD}:fontsize=17:x=${TEXT_INSET}:y=${TREND_CD_VALUE_Y}:${SHADOW}[trend_out];"
     prev="trend_out"
 
     # ---------------- Right panel: stats + instrument + facts ----------------
@@ -904,9 +940,9 @@ run_video() {
     # references [3:v] when EVENT_IMAGE_AVAILABLE is true (see
     # prepare_video_content), so it's safe to omit this input otherwise.
     local EVENT_IMAGE_INPUT_ARGS=()
-    if [ "$EVENT_IMAGE_AVAILABLE" = true ]; then
-        EVENT_IMAGE_INPUT_ARGS=(-loop 1 -i "$EVENT_IMAGE")
-    fi
+if [ "$EVENT_IMAGE_AVAILABLE" = true ]; then
+    EVENT_IMAGE_INPUT_ARGS=(-thread_queue_size 512 -loop 1 -framerate 30 -i "$EVENT_IMAGE")
+fi
 
     while [ "$attempt" -le "$MAX_RETRIES" ]; do
         echo "----------------------------------------"
