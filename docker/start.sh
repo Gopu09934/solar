@@ -158,6 +158,30 @@ if [ ! -s "$DOT_MARKER" ]; then
 fi
 
 #############################################
+# Trending-event image (left panel), downloaded
+# ONCE at startup — e.g. a picture for the Aug 12,
+# 2026 total solar eclipse callout.
+#
+# Optional: set EVENT_IMAGE_URL to a direct image
+# link. If it's unset or the download fails, the
+# TRENDING NOW block still renders with text only
+# (no picture, no crash) — see prepare_video_content.
+#############################################
+EVENT_IMAGE="event_image.jpg"
+EVENT_IMAGE_AVAILABLE=false
+if [ -n "${EVENT_IMAGE_URL:-}" ]; then
+    echo "Downloading trending-event image..."
+    if curl -sL --fail -o "$EVENT_IMAGE" "$EVENT_IMAGE_URL" && [ -s "$EVENT_IMAGE" ]; then
+        EVENT_IMAGE_AVAILABLE=true
+        echo "  OK ($(du -h "$EVENT_IMAGE" | cut -f1))"
+    else
+        echo "  WARNING: failed to download EVENT_IMAGE_URL — TRENDING NOW block will show text only."
+    fi
+else
+    echo "NOTICE: EVENT_IMAGE_URL not set — TRENDING NOW block will show text only."
+fi
+
+#############################################
 # Background clock writer (avoids fragile
 # drawtext %{gmtime} expansion syntax)
 #############################################
@@ -257,6 +281,9 @@ printf 'SUBSCRIBE for the Sun, live 24/7'   > "$ASSET_DIR/cta.txt"
 printf 'DID YOU KNOW'                       > "$ASSET_DIR/fact_label.txt"
 printf 'INSTRUMENT'                         > "$ASSET_DIR/instr_label.txt"
 printf 'SDO · AIA'                          > "$ASSET_DIR/instr_title.txt"
+printf 'TRENDING NOW'                       > "$ASSET_DIR/trend_label.txt"
+printf 'TOTAL SOLAR ECLIPSE'                > "$ASSET_DIR/trend_title.txt"
+printf 'Aug 12, 2026 — path crosses Greenland, Iceland & Spain' | fold -s -w 30 > "$ASSET_DIR/trend_sub.txt"
 
 #############################################
 # Default headline / fact pools (used as a
@@ -278,6 +305,7 @@ DEFAULT_HEADLINES=(
     "Solar maximum brings far more sunspots, flares, and eruptions than the quieter years of the cycle."
     "SDO has been watching the Sun continuously since its launch in 2010."
     "The corona, the Sun's faint outer atmosphere, is far hotter than the surface beneath it."
+    "TRENDING: a total solar eclipse sweeps over Greenland, Iceland, and Spain on August 12."
 )
 
 DEFAULT_FACTS=(
@@ -301,6 +329,7 @@ DEFAULT_FACTS=(
     "Solar maximum and solar minimum mark the peaks and lulls of the roughly eleven-year solar cycle."
     "Extreme ultraviolet light lets telescopes like SDO see structures invisible in ordinary light."
     "The Sun is close enough that its light and heat make life on Earth possible."
+    "On August 12, 2026, mainland Europe sees its first total solar eclipse since 1999."
 )
 
 #############################################
@@ -670,37 +699,34 @@ prepare_video_content() {
         fi
     done
 
-    # ---------------- Left panel: live "solar activity" graph ----------------
-    # Fills the blank space under the progress dots with an animated
-    # equalizer-style bar graph plus a live-looking percentage readout.
-    # Every bar is a pure ffmpeg expression (two out-of-phase sine waves
-    # per bar, clipped to a min/max height) — no extra background writer
-    # needed, and drawbox re-evaluates x/y/w/h every frame so it never
-    # looks frozen the way a static overlay would.
-    local GRAPH_LABEL_Y=$((DOTS_Y + 40))
-    local GRAPH_BASE_Y=$((GRAPH_LABEL_Y + 160))
-    local BAR_COUNT=14
-    local BAR_W=13
-    local BAR_GAP=6
-    local BAR_MINH=8
-    local BAR_MAXH=100
+    # ---------------- Left panel: TRENDING NOW (Aug 12 eclipse) ----------------
+    # Replaces the old animated "solar activity" bar graph with a
+    # callout for the Aug 12, 2026 total solar eclipse: a pulsing
+    # "TRENDING NOW" tag, the event image (if EVENT_IMAGE_URL was
+    # downloaded at startup — see top of script), and a caption.
+    # If no image was downloaded, the picture frame is simply skipped
+    # and the text block is used on its own — nothing breaks.
+    local TREND_LABEL_Y=$((DOTS_Y + 40))
+    local TREND_IMG_Y=$((TREND_LABEL_Y + 22))
+    local TREND_IMG_W=$PANEL_TEXT_W
+    local TREND_IMG_H=150
+    local TREND_TITLE_Y=$((TREND_IMG_Y + TREND_IMG_H + 14))
+    local TREND_SUB_Y=$((TREND_TITLE_Y + 24))
 
-    CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 2)):y=$((GRAPH_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill:enable='lt(mod(t\,1.4)\,0.9)'[sa1];"
-    CHAIN+="[sa1]drawtext=fontfile=${FONT}:text='SOLAR ACTIVITY':fontcolor=white@0.55:fontsize=11:x=$((TEXT_INSET + 14)):y=$((GRAPH_LABEL_Y - 8))[sa2];"
-    CHAIN+="[sa2]drawtext=fontfile=${FONT}:text='%{eif\:64+24*sin(2*PI*t/11)\:d} PCT':fontcolor=${GOLD}:fontsize=16:x=${TEXT_INSET}:y=$((GRAPH_LABEL_Y + 10)):${SHADOW}[sa3];"
-    prev="sa3"
+    CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 2)):y=$((TREND_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[tr1];"
+    CHAIN+="[tr1]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_label.txt:fontcolor=white@0.55:fontsize=11:x=$((TEXT_INSET + 14)):y=$((TREND_LABEL_Y - 8))[tr2];"
+    prev="tr2"
 
-    local bi bx h_expr y_expr bnxt
-    for ((bi = 0; bi < BAR_COUNT; bi++)); do
-        bx=$((TEXT_INSET + bi * (BAR_W + BAR_GAP)))
-        h_expr="clip(60+38*sin(2*PI*t/3.1+${bi}*0.55)+18*sin(2*PI*t/1.6+${bi}*0.9)\,${BAR_MINH}\,${BAR_MAXH})"
-        y_expr="${GRAPH_BASE_Y}-(${h_expr})"
-        bnxt="sabar${bi}"
-        CHAIN+="[${prev}]drawbox=x=${bx}:y='${y_expr}':w=${BAR_W}:h='${h_expr}':color=${GOLD}@0.8:t=fill[${bnxt}];"
-        prev="$bnxt"
-    done
-    CHAIN+="[${prev}]drawbox=x=${TEXT_INSET}:y=${GRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[sabase];"
-    prev="sabase"
+    if [ "$EVENT_IMAGE_AVAILABLE" = true ]; then
+        CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 3)):y=$((TREND_IMG_Y - 3)):w=$((TREND_IMG_W + 6)):h=$((TREND_IMG_H + 6)):color=${GOLD}@0.7:t=2[tr3];"
+        CHAIN+="[3:v]scale=${TREND_IMG_W}:${TREND_IMG_H}:force_original_aspect_ratio=increase,crop=${TREND_IMG_W}:${TREND_IMG_H}[trimg];"
+        CHAIN+="[tr3][trimg]overlay=${TEXT_INSET}:${TREND_IMG_Y}[tr4];"
+        prev="tr4"
+    fi
+
+    CHAIN+="[${prev}]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_title.txt:fontcolor=${GOLD}:fontsize=18:x=${TEXT_INSET}:y=${TREND_TITLE_Y}:${SHADOW}[tr5];"
+    CHAIN+="[tr5]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_sub.txt:fontcolor=white@0.8:fontsize=13:line_spacing=5:x=${TEXT_INSET}:y=${TREND_SUB_Y}[trend_out];"
+    prev="trend_out"
 
     # ---------------- Right panel: stats + instrument + facts ----------------
     CHAIN+="[${prev}]drawbox=x=${RIGHT_X0}:y=0:w=${PANEL_W}:h=720:color=black@0.92:t=fill[r1];"
@@ -859,6 +885,16 @@ run_video() {
         AUDIO_INPUT_ARGS=(-f lavfi -i "anullsrc=r=48000:cl=stereo")
     fi
 
+    # Trending-event image goes AFTER audio so it lands at input index 3
+    # without disturbing AUDIO_MAP (still "2:a"). Only added when a real
+    # image was downloaded at startup — the filter graph only ever
+    # references [3:v] when EVENT_IMAGE_AVAILABLE is true (see
+    # prepare_video_content), so it's safe to omit this input otherwise.
+    local EVENT_IMAGE_INPUT_ARGS=()
+    if [ "$EVENT_IMAGE_AVAILABLE" = true ]; then
+        EVENT_IMAGE_INPUT_ARGS=(-loop 1 -i "$EVENT_IMAGE")
+    fi
+
     while [ "$attempt" -le "$MAX_RETRIES" ]; do
         echo "----------------------------------------"
         echo "Streaming (attempt ${attempt}/${MAX_RETRIES}):"
@@ -876,6 +912,7 @@ run_video() {
         -i "$url" \
         -loop 1 -i "$DOT_MARKER" \
         "${AUDIO_INPUT_ARGS[@]}" \
+        "${EVENT_IMAGE_INPUT_ARGS[@]}" \
         -filter_complex "$filter" \
         -map "[final]" \
         -map "$AUDIO_MAP" \
