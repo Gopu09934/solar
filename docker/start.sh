@@ -706,12 +706,25 @@ prepare_video_content() {
     # downloaded at startup — see top of script), and a caption.
     # If no image was downloaded, the picture frame is simply skipped
     # and the text block is used on its own — nothing breaks.
-    local TREND_LABEL_Y=$((DOTS_Y + 40))
-    local TREND_IMG_Y=$((TREND_LABEL_Y + 22))
+    local TREND_LABEL_Y=$((DOTS_Y + 34))
+    local TREND_IMG_Y=$((TREND_LABEL_Y + 20))
     local TREND_IMG_W=$PANEL_TEXT_W
-    local TREND_IMG_H=150
-    local TREND_TITLE_Y=$((TREND_IMG_Y + TREND_IMG_H + 14))
-    local TREND_SUB_Y=$((TREND_TITLE_Y + 24))
+    # The block's total height depends on how many lines the current
+    # headline wrapped to (DOTS_Y shifts with it), so the image height
+    # is computed to fit — never a fixed value — reserving TREND_TEXT_H
+    # below the image for the title + a 2-line caption, and keeping the
+    # whole thing above TREND_MAX_BOTTOM (comfortably clear of the
+    # bottom ticker bar, which starts at y=680). This is what was
+    # broken before: a fixed 150px image height could push the title
+    # and caption text down into the ticker's y=680-720 band, where the
+    # ticker's opaque background (drawn later, on top) hid them.
+    local TREND_TEXT_H=64
+    local TREND_MAX_BOTTOM=668
+    local TREND_IMG_H=$((TREND_MAX_BOTTOM - TREND_IMG_Y - TREND_TEXT_H))
+    [ "$TREND_IMG_H" -gt 130 ] && TREND_IMG_H=130
+    [ "$TREND_IMG_H" -lt 50 ] && TREND_IMG_H=50
+    local TREND_TITLE_Y=$((TREND_IMG_Y + TREND_IMG_H + 8))
+    local TREND_SUB_Y=$((TREND_TITLE_Y + 22))
 
     CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 2)):y=$((TREND_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[tr1];"
     CHAIN+="[tr1]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/trend_label.txt:fontcolor=white@0.55:fontsize=11:x=$((TEXT_INSET + 14)):y=$((TREND_LABEL_Y - 8))[tr2];"
