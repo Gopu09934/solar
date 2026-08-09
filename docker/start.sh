@@ -767,7 +767,7 @@ prepare_video_content() {
     if [ "$EVENT_IMAGE_AVAILABLE" = true ]; then
         CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 3)):y=$((TREND_IMG_Y - 3)):w=$((TREND_IMG_W + 6)):h=$((TREND_IMG_H + 6)):color=${GOLD}@0.7:t=2[tr3];"
         CHAIN+="[3:v]scale=${TREND_IMG_W}:${TREND_IMG_H}:force_original_aspect_ratio=increase,crop=${TREND_IMG_W}:${TREND_IMG_H}[trimg];"
-        CHAIN+="[tr3][trimg]overlay=${TEXT_INSET}:${TREND_IMG_Y}[tr4];"
+        CHAIN+="[tr3][trimg]overlay=${TEXT_INSET}:${TREND_IMG_Y}:shortest=1[tr4];"
         prev="tr4"
     fi
 
@@ -912,10 +912,13 @@ run_video() {
     duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$url" 2>/dev/null || echo "")
     duration=${duration%.*}
     [[ "$duration" =~ ^[0-9]+$ ]] || duration=""
+
+    local HARD_CAP=""
     if [ -n "$duration" ]; then
-        echo "Probed duration: ${duration}s"
+        HARD_CAP=$((duration + 90))   # grace period past expected end
+        echo "Probed duration: ${duration}s (hard cap ${HARD_CAP}s)"
     else
-        echo "Could not probe duration — countdown will show generic filler text."
+        echo "Could not probe duration — countdown will show generic filler text, and no hard cap will apply (relying on natural EOF)."
     fi
 
     local filter
@@ -959,7 +962,7 @@ fi
         -reconnect_delay_max 5 \
         -re \
         -i "$url" \
-        -loop 1 -i "$DOT_MARKER" \
+        -loop 1 -framerate 30 -i "$DOT_MARKER" \
         "${AUDIO_INPUT_ARGS[@]}" \
         "${EVENT_IMAGE_INPUT_ARGS[@]}" \
         -filter_complex "$filter" \
@@ -986,8 +989,24 @@ fi
         -ac 2 \
         -shortest \
         -f flv \
-        "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY}"
+        "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY}" &
+        local FFMPEG_PID=$!
+
+        local WATCHDOG_PID=""
+        if [ -n "$HARD_CAP" ]; then
+            (
+                sleep "$HARD_CAP"
+                if kill -0 "$FFMPEG_PID" 2>/dev/null; then
+                    echo "WARNING: ffmpeg overran hard cap (${HARD_CAP}s) — force-killing to advance to next video."
+                    kill -9 "$FFMPEG_PID" 2>/dev/null
+                fi
+            ) &
+            WATCHDOG_PID=$!
+        fi
+
+        wait "$FFMPEG_PID"
         local exit_code=$?
+        [ -n "$WATCHDOG_PID" ] && kill "$WATCHDOG_PID" 2>/dev/null
         set -e
 
         if [ "$exit_code" -eq 0 ]; then
