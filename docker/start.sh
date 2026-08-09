@@ -670,6 +670,38 @@ prepare_video_content() {
         fi
     done
 
+    # ---------------- Left panel: live "solar activity" graph ----------------
+    # Fills the blank space under the progress dots with an animated
+    # equalizer-style bar graph plus a live-looking percentage readout.
+    # Every bar is a pure ffmpeg expression (two out-of-phase sine waves
+    # per bar, clipped to a min/max height) — no extra background writer
+    # needed, and drawbox re-evaluates x/y/w/h every frame so it never
+    # looks frozen the way a static overlay would.
+    local GRAPH_LABEL_Y=$((DOTS_Y + 40))
+    local GRAPH_BASE_Y=$((GRAPH_LABEL_Y + 160))
+    local BAR_COUNT=14
+    local BAR_W=13
+    local BAR_GAP=6
+    local BAR_MINH=8
+    local BAR_MAXH=100
+
+    CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 2)):y=$((GRAPH_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill:enable='lt(mod(t\,1.4)\,0.9)'[sa1];"
+    CHAIN+="[sa1]drawtext=fontfile=${FONT}:text='SOLAR ACTIVITY':fontcolor=white@0.55:fontsize=11:x=$((TEXT_INSET + 14)):y=$((GRAPH_LABEL_Y - 8))[sa2];"
+    CHAIN+="[sa2]drawtext=fontfile=${FONT}:text='%{eif\:64+24*sin(2*PI*t/11)\:d} PCT':fontcolor=${GOLD}:fontsize=16:x=${TEXT_INSET}:y=$((GRAPH_LABEL_Y + 10)):${SHADOW}[sa3];"
+    prev="sa3"
+
+    local bi bx h_expr y_expr bnxt
+    for ((bi = 0; bi < BAR_COUNT; bi++)); do
+        bx=$((TEXT_INSET + bi * (BAR_W + BAR_GAP)))
+        h_expr="clip(60+38*sin(2*PI*t/3.1+${bi}*0.55)+18*sin(2*PI*t/1.6+${bi}*0.9)\,${BAR_MINH}\,${BAR_MAXH})"
+        y_expr="${GRAPH_BASE_Y}-(${h_expr})"
+        bnxt="sabar${bi}"
+        CHAIN+="[${prev}]drawbox=x=${bx}:y='${y_expr}':w=${BAR_W}:h='${h_expr}':color=${GOLD}@0.8:t=fill[${bnxt}];"
+        prev="$bnxt"
+    done
+    CHAIN+="[${prev}]drawbox=x=${TEXT_INSET}:y=${GRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[sabase];"
+    prev="sabase"
+
     # ---------------- Right panel: stats + instrument + facts ----------------
     CHAIN+="[${prev}]drawbox=x=${RIGHT_X0}:y=0:w=${PANEL_W}:h=720:color=black@0.92:t=fill[r1];"
     CHAIN+="[r1]drawbox=x=$((RIGHT_X0 - 3)):y=0:w=3:h=720:color=${GOLD}@0.75:t=fill[r2];"
@@ -699,6 +731,44 @@ prepare_video_content() {
         CHAIN+="[${prev}]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/fact${idx}.txt:fontcolor=white@0.9:fontsize=${FACT_FONTSIZE}:line_spacing=${FACT_LINE_SPACING}:x=${RTEXT_INSET}:y=${RFACT_TEXT_Y}:alpha='${FALPHA}'[${nxt}];"
         prev="$nxt"
     done
+
+    # ---------------- Right panel: live readings + EUV graph ----------------
+    # Same idea as the left panel's activity graph, mirrored on this
+    # side with a temperature readout on top (using the same live-number
+    # %{eif:...} trick) so both panels feel "alive" instead of static.
+    local RREAD_DIV_Y=$((RFACT_TEXT_Y + MAX_FACT_LINES * FACT_LINE_H + 16))
+    local RREAD_LABEL_Y=$((RREAD_DIV_Y + 14))
+    local RREAD_LINE1_Y=$((RREAD_LABEL_Y + 22))
+    local RREAD_LINE2_Y=$((RREAD_LINE1_Y + 20))
+    local RGRAPH_LABEL_Y=$((RREAD_LINE2_Y + 30))
+    local RGRAPH_BASE_Y=$((RGRAPH_LABEL_Y + 150))
+
+    CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RREAD_DIV_Y}:w=${PANEL_TEXT_W}:h=2:color=white@0.15:t=fill[rr0];"
+    CHAIN+="[rr0]drawtext=fontfile=${FONT}:text='LIVE READINGS':fontcolor=${GOLD}@0.85:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LABEL_Y}[rr1];"
+    CHAIN+="[rr1]drawtext=fontfile=${FONT}:text='SURFACE   5\,500 C':fontcolor=white@0.85:fontsize=14:x=${RTEXT_INSET}:y=${RREAD_LINE1_Y}[rr2];"
+    CHAIN+="[rr2]drawtext=fontfile=${FONT}:text='CORE   %{eif\:14900000+400000*sin(t/7)\:d} K':fontcolor=white@0.85:fontsize=14:x=${RTEXT_INSET}:y=${RREAD_LINE2_Y}[rr3];"
+    prev="rr3"
+
+    CHAIN+="[${prev}]drawbox=x=$((RTEXT_INSET - 2)):y=$((RGRAPH_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[rg1];"
+    CHAIN+="[rg1]drawtext=fontfile=${FONT}:text='EUV FLUX':fontcolor=white@0.55:fontsize=11:x=$((RTEXT_INSET + 14)):y=$((RGRAPH_LABEL_Y - 8))[rg2];"
+    prev="rg2"
+
+    local RBAR_COUNT=14
+    local RBAR_W=13
+    local RBAR_GAP=6
+    local RBAR_MINH=8
+    local RBAR_MAXH=100
+    local ri rbx rh_expr ry_expr rnxt
+    for ((ri = 0; ri < RBAR_COUNT; ri++)); do
+        rbx=$((RTEXT_INSET + ri * (RBAR_W + RBAR_GAP)))
+        rh_expr="clip(55+34*sin(2*PI*t/2.6+${ri}*0.7)+20*sin(2*PI*t/1.3+${ri}*1.1)\,${RBAR_MINH}\,${RBAR_MAXH})"
+        ry_expr="${RGRAPH_BASE_Y}-(${rh_expr})"
+        rnxt="rgbar${ri}"
+        CHAIN+="[${prev}]drawbox=x=${rbx}:y='${ry_expr}':w=${RBAR_W}:h='${rh_expr}':color=${GOLD}@0.75:t=fill[${rnxt}];"
+        prev="$rnxt"
+    done
+    CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RGRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[rgbase];"
+    prev="rgbase"
 
     BASE_CHAIN="$CHAIN"
     FACT_END="$prev"
