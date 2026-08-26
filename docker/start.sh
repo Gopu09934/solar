@@ -43,7 +43,7 @@ INFO_FILE="solar_info.txt"
 SLOT=6            # seconds each headline is shown
 FACT_SLOT=8       # seconds each fun fact is shown
 TICKER_SPEED=110  # pixels/second for the bottom ticker scroll
-CHANNEL_NAME="Solar Watch Live"
+CHANNEL_NAME="SOLAR ACTIVITY WATCH"
 SHADOW="shadowcolor=black@0.6:shadowx=1:shadowy=1"
 HEADLINE_FONTSIZE=21
 HEADLINE_LINE_SPACING=9
@@ -816,7 +816,7 @@ build_final_filter() {
     tail+="[tk4]drawbox=x=0:y=682:w=113:h=38:color=${GOLD}:t=fill[tk5];"
     tail+="[tk5]drawtext=fontfile=${FONT}:text='LIVE NOW':fontcolor=black:fontsize=15:x=13:y=695[tk6];"
 
-    tail+="[tk6]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.45:fontsize=14:borderw=1.5:bordercolor=black@0.7:x=(w-text_w)/2:y=657[final]"
+    tail+="[tk6]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.45:fontsize=14:borderw=1.5:bordercolor=black@0.7:x=(w-text_w)/2:y=25[final]"
 
     echo "$tail"
 }
