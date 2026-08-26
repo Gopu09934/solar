@@ -1,5 +1,9 @@
-from pathlib import Path
-import zipfile, textwrap, os
+#!/bin/bash
+set -euo pipefail
+
+#############################################
+# PREMIUM SOLAR / SDO DOCUMENTARY STREAM
+...
 
 outdir = Path("/mnt/data/start")
 outdir.mkdir(exist_ok=True)
