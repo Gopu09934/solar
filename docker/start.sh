@@ -1,7 +1,7 @@
 from pathlib import Path
 import zipfile, textwrap, os
 
-outdir = Path("/mnt/data/premium_solar_stream")
+outdir = Path("/mnt/data/start")
 outdir.mkdir(exist_ok=True)
 
 script = r'''#!/bin/bash
