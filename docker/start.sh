@@ -3,13 +3,10 @@ set -euo pipefail
 
 #############################################
 # PREMIUM SOLAR / SDO DOCUMENTARY STREAM
-...
+#############################################
 
-outdir = Path("/mnt/data/start")
-outdir.mkdir(exist_ok=True)
-
-script = r'''#!/bin/bash
-set -euo pipefail
+: "${VIDEO_URL:?ERROR: VIDEO_URL is not set}"
+: "${YOUTUBE_STREAM_KEY:?ERROR: YOUTUBE_STREAM_KEY is not set}"
 
 #############################################
 # PREMIUM SOLAR / SDO DOCUMENTARY STREAM
