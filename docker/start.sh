@@ -79,6 +79,23 @@ TEXT_INSET=33                          # left panel text left-inset
 RTEXT_INSET=$((RIGHT_X0 + 33))         # right panel text left-inset
 PANEL_TEXT_W=$((PANEL_W - 66))         # usable text width inside a panel
 
+# ---------------------------------------------------------------
+# Center strip is now split into 4 stacked bands instead of one
+# full-height video:
+#   Row 1 - the live SDO video, still running continuously
+#   Row 2 - an animated "live solar wind" visualization
+#   Row 3 - a compact mission-status info block (text)
+#   Row 4 - a second animated visualization ("geomagnetic activity")
+# ---------------------------------------------------------------
+CENTER_ROWS=4
+ROW_H=$((720 / CENTER_ROWS))     # 180
+ROW1_Y=0                         # video
+ROW2_Y=$((ROW_H))                # 180 - visualization 1
+ROW3_Y=$((ROW_H * 2))            # 360 - info
+ROW4_Y=$((ROW_H * 3))            # 540 - visualization 2
+MTEXT_INSET=$((CENTER_X0 + 30))  # center-strip text left-inset
+MVALUE_X=$((MTEXT_INSET + 150))  # x for the value half of a label:value row
+
 # Don't show "N watching now" until the live viewer count reaches this
 # many — a very low number (e.g. "5 watching") reads worse to a new
 # visitor than showing nothing at all. Raise/lower to taste.
@@ -785,21 +802,103 @@ prepare_video_content() {
     #########################################
     # Rebuild BASE_CHAIN for this video's content
     #########################################
-    # Fit the (typically square) SDO frame into the center strip: scale
-    # up so it fully covers CENTER_W x 720, then crop the small excess
-    # off the sides. That keeps the Sun large and edge-to-edge with no
-    # black bars, at the cost of a modest side crop.
+    # Fit the (typically square) SDO frame into ROW 1 only now (top
+    # quarter of the center strip): scale up so it fully covers
+    # CENTER_W x ROW_H, then crop the small excess off the sides. The
+    # video keeps running continuously in this band the whole time;
+    # rows 2-4 below it are new visualization/info bands.
     CHAIN="color=c=black:s=1280x720[canvas];"
-    CHAIN+="[0:v]scale=${CENTER_W}:720:force_original_aspect_ratio=increase,crop=${CENTER_W}:720[vidfit];"
-    CHAIN+="[canvas][vidfit]overlay=${CENTER_X0}:0:shortest=1[base];"
+    CHAIN+="[0:v]scale=${CENTER_W}:${ROW_H}:force_original_aspect_ratio=increase,crop=${CENTER_W}:${ROW_H}[vidfit];"
+    CHAIN+="[canvas][vidfit]overlay=${CENTER_X0}:${ROW1_Y}:shortest=1[base];"
 
     # Optional coordinate-based callout labels for this video, drawn
-    # onto the Sun before the panels so the panels stay on top.
+    # onto the Sun before the panels so the panels stay on top. Since
+    # the video now only occupies row 1 (y 0-${ROW_H}), a <basename>.labels.txt
+    # file's y coordinates should fall within that same range to land
+    # on the video — see build_labels_chain()'s own doc comment.
     build_labels_chain "$url"
     CHAIN+="$LABELS_CHAIN"
 
+    # ---------------- Center strip row dividers ----------------
+    CHAIN+="${LABELS_OUT}drawbox=x=${CENTER_X0}:y=${ROW2_Y}:w=${CENTER_W}:h=2:color=${GOLD}@0.4:t=fill[cmdiv1];"
+    CHAIN+="[cmdiv1]drawbox=x=${CENTER_X0}:y=${ROW3_Y}:w=${CENTER_W}:h=2:color=${GOLD}@0.4:t=fill[cmdiv2];"
+    CHAIN+="[cmdiv2]drawbox=x=${CENTER_X0}:y=${ROW4_Y}:w=${CENTER_W}:h=2:color=${GOLD}@0.4:t=fill[cmdiv3];"
+
+    # ---------------- Row 2: "LIVE SOLAR WIND" visualization ----------------
+    # Same animated-bar technique as the side panels' graphs (pure
+    # ffmpeg sine expressions, no extra data writer needed) so it's
+    # always moving even if the space-weather poller is disabled.
+    local CM2_LABEL_Y=$((ROW2_Y + 16))
+    local CM2_BASE_Y=$((ROW4_Y - 12))
+    local CM_BAR_COUNT=18
+    local CM_BAR_W=24
+    local CM_BAR_GAP=8
+    local CM_BAR_MINH=10
+    local CM_BAR_MAXH=$((ROW_H - 40))
+
+    CHAIN+="[cmdiv3]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM2_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill:enable='lt(mod(t\,1.4)\,0.9)'[cm2a];"
+    CHAIN+="[cm2a]drawtext=fontfile=${FONT}:text='LIVE SOLAR WIND':fontcolor=white@0.7:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM2_LABEL_Y - 6))[cm2b];"
+    local prev="cm2b"
+    local ci cbx ch_expr cy_expr cnxt
+    for ((ci = 0; ci < CM_BAR_COUNT; ci++)); do
+        cbx=$((MTEXT_INSET + ci * (CM_BAR_W + CM_BAR_GAP)))
+        ch_expr="clip(70+45*sin(2*PI*t/3.4+${ci}*0.5)+22*sin(2*PI*t/1.7+${ci}*0.85)\,${CM_BAR_MINH}\,${CM_BAR_MAXH})"
+        cy_expr="${CM2_BASE_Y}-(${ch_expr})"
+        cnxt="cm2bar${ci}"
+        CHAIN+="[${prev}]drawbox=x=${cbx}:y='${cy_expr}':w=${CM_BAR_W}:h='${ch_expr}':color=${GOLD}@0.8:t=fill[${cnxt}];"
+        prev="$cnxt"
+    done
+    CHAIN+="[${prev}]drawbox=x=${MTEXT_INSET}:y=${CM2_BASE_Y}:w=$((CENTER_W - 60)):h=1:color=white@0.2:t=fill[cm2base];"
+    prev="cm2base"
+
+    # ---------------- Row 3: mission-status info block ----------------
+    # Reuses text files already written elsewhere (clock, instrument,
+    # and the live space-weather readings) rather than adding new
+    # writers — this is just a compact re-display of live data.
+    local CM3_LABEL_Y=$((ROW3_Y + 16))
+    local CM3_LINE1_Y=$((CM3_LABEL_Y + 26))
+    local CM3_LINE2_Y=$((CM3_LINE1_Y + 22))
+    local CM3_LINE3_Y=$((CM3_LINE2_Y + 22))
+    local CM3_LINE4_Y=$((CM3_LINE3_Y + 22))
+    local CM3_LINE5_Y=$((CM3_LINE4_Y + 22))
+
+    CHAIN+="[cm2base]drawtext=fontfile=${FONT}:text='MISSION STATUS':fontcolor=${GOLD}@0.85:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LABEL_Y}[cm3a];"
+    CHAIN+="[cm3a]drawtext=fontfile=${FONT}:text='INSTRUMENT':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE1_Y}[cm3b];"
+    CHAIN+="[cm3b]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/instr_title.txt:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE1_Y}[cm3c];"
+    CHAIN+="[cm3c]drawtext=fontfile=${FONT}:text='UTC TIME':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE2_Y}[cm3d];"
+    CHAIN+="[cm3d]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/clock.txt:reload=1:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE2_Y}[cm3e];"
+    CHAIN+="[cm3e]drawtext=fontfile=${FONT}:text='SOLAR WIND':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE3_Y}[cm3f];"
+    CHAIN+="[cm3f]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/wind_speed.txt:reload=1:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE3_Y}[cm3g];"
+    CHAIN+="[cm3g]drawtext=fontfile=${FONT}:text='BZ / KP':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE4_Y}[cm3h];"
+    CHAIN+="[cm3h]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/bz.txt:reload=1:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE4_Y}[cm3i];"
+    CHAIN+="[cm3i]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/kp.txt:reload=1:fontcolor=white:fontsize=14:x=$((MVALUE_X + 80)):y=${CM3_LINE4_Y}[cm3j];"
+    CHAIN+="[cm3j]drawtext=fontfile=${FONT}:text='X-RAY FLARE':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE5_Y}[cm3k];"
+    CHAIN+="[cm3k]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/xray_class.txt:reload=1:fontcolor=${GOLD}:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE5_Y}[cm3final];"
+    prev="cm3final"
+
+    # ---------------- Row 4: "GEOMAGNETIC ACTIVITY" visualization ----------------
+    # Same bar technique as row 2, different phase/frequency so the two
+    # visualizations don't look identical, and stopped short of the
+    # bottom ticker (y=680) so it doesn't visually collide with it.
+    local CM4_LABEL_Y=$((ROW4_Y + 16))
+    local CM4_BASE_Y=670
+
+    CHAIN+="[${prev}]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM4_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[cm4a];"
+    CHAIN+="[cm4a]drawtext=fontfile=${FONT}:text='GEOMAGNETIC ACTIVITY':fontcolor=white@0.7:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM4_LABEL_Y - 6))[cm4b];"
+    prev="cm4b"
+    local di dbx dh_expr dy_expr dnxt
+    for ((di = 0; di < CM_BAR_COUNT; di++)); do
+        dbx=$((MTEXT_INSET + di * (CM_BAR_W + CM_BAR_GAP)))
+        dh_expr="clip(60+36*sin(2*PI*t/2.9+${di}*0.65)+20*sin(2*PI*t/1.5+${di}*1.05)\,${CM_BAR_MINH}\,${CM_BAR_MAXH})"
+        dy_expr="${CM4_BASE_Y}-(${dh_expr})"
+        dnxt="cm4bar${di}"
+        CHAIN+="[${prev}]drawbox=x=${dbx}:y='${dy_expr}':w=${CM_BAR_W}:h='${dh_expr}':color=${GOLD}@0.75:t=fill[${dnxt}];"
+        prev="$dnxt"
+    done
+    CHAIN+="[${prev}]drawbox=x=${MTEXT_INSET}:y=${CM4_BASE_Y}:w=$((CENTER_W - 60)):h=1:color=white@0.2:t=fill[cm4base];"
+
     # ---------------- Left panel: story / headlines ----------------
-    CHAIN+="${LABELS_OUT}drawbox=x=0:y=0:w=${PANEL_W}:h=720:color=black@0.92:t=fill[p1];"
+    CHAIN+="[cm4base]drawbox=x=0:y=0:w=${PANEL_W}:h=720:color=black@0.92:t=fill[p1];"
     CHAIN+="[p1]drawbox=x=${PANEL_W}:y=0:w=3:h=720:color=${GOLD}@0.75:t=fill[p2];"
     CHAIN+="[p2]drawbox=x=0:y=0:w=${PANEL_W}:h=4:color=${GOLD}@0.9:t=fill[p3];"
 
