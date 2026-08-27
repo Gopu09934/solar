@@ -29,6 +29,17 @@ if [ -z "${YOUTUBE_API_KEY:-}" ] || [ -z "${YOUTUBE_CHANNEL_ID:-}" ]; then
     SHOW_STATS=false
 fi
 
+# Live space-weather panel (solar wind speed, density, IMF Bz, Kp index,
+# X-ray flare class) — pulled from NOAA SWPC's public JSON feeds, which
+# need no API key/auth, so this is on by default. Can still be disabled
+# explicitly if a runner has no network access to swpc.noaa.gov.
+SHOW_SPACE_WEATHER=true
+if [ "${DISABLE_SPACE_WEATHER:-false}" = "true" ]; then
+    echo "NOTICE: DISABLE_SPACE_WEATHER=true — space weather panel will be hidden."
+    SHOW_SPACE_WEATHER=false
+fi
+NOAA="https://services.swpc.noaa.gov"
+
 echo "========================================"
 echo "Starting 24/7 YouTube Stream (Sun / SDO Overlay)"
 echo "Output Resolution : 1280x720 (720p — sized for a 2-core CI runner)"
@@ -43,7 +54,7 @@ INFO_FILE="solar_info.txt"
 SLOT=6            # seconds each headline is shown
 FACT_SLOT=8       # seconds each fun fact is shown
 TICKER_SPEED=110  # pixels/second for the bottom ticker scroll
-CHANNEL_NAME="SOLAR ACTIVITY WATCH"
+CHANNEL_NAME="Solar Watch Live"
 SHADOW="shadowcolor=black@0.6:shadowx=1:shadowy=1"
 HEADLINE_FONTSIZE=21
 HEADLINE_LINE_SPACING=9
@@ -244,7 +255,138 @@ if [ "$SHOW_STATS" = true ]; then
     VIEWERS_PID=$!
 fi
 
-trap 'kill "$CLOCK_PID" 2>/dev/null || true; [ -n "$SUBS_PID" ] && kill "$SUBS_PID" 2>/dev/null || true; [ -n "$VIEWERS_PID" ] && kill "$VIEWERS_PID" 2>/dev/null || true' EXIT
+#############################################
+# Background space-weather writer
+#
+# Polls NOAA SWPC's public real-time JSON feeds
+# (no API key required) every 60s and writes
+# individually-formatted lines for the right
+# panel's LIVE READINGS block:
+#   - solar wind bulk speed + proton density  (rtsw_wind_1m.json)
+#   - IMF Bz (GSM)                            (rtsw_mag_1m.json)
+#   - planetary Kp index                      (planetary_k_index_1m.json)
+#   - current X-ray flare class (A/B/C/M/X)   (xrays-1-day.json, long/0.1-0.8nm channel)
+#
+# All parsing is done with a single python3
+# process per cycle (these feeds are JSON
+# arrays of objects, which is painful to parse
+# reliably with grep/sed the way the simpler
+# YouTube counters above do). Each field is
+# fetched independently and wrapped in its own
+# try/except so one feed being down/slow/rate-
+# limited doesn't blank out the others — same
+# "degrade one field, not the whole panel"
+# approach as SHOW_STATS above.
+#############################################
+printf ' ' > "$ASSET_DIR/wind_speed.txt"
+printf ' ' > "$ASSET_DIR/wind_density.txt"
+printf ' ' > "$ASSET_DIR/bz.txt"
+printf ' ' > "$ASSET_DIR/kp.txt"
+printf ' ' > "$ASSET_DIR/xray_class.txt"
+SPACEWEATHER_PID=""
+if [ "$SHOW_SPACE_WEATHER" = true ]; then
+    cat > space_weather_poll.py << 'PYEOF'
+import json
+import urllib.request
+import sys
+
+NOAA = sys.argv[1]
+ASSET_DIR = sys.argv[2]
+
+def fetch(path):
+    with urllib.request.urlopen(f"{NOAA}{path}", timeout=15) as r:
+        return json.loads(r.read())
+
+def latest_numeric(records, key):
+    # Walk backwards for the most recent record that actually has a
+    # usable numeric value for `key` — the newest record or two is
+    # often still null/pending on these real-time feeds.
+    for rec in reversed(records):
+        v = rec.get(key)
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+def write(name, text):
+    tmp = f"{ASSET_DIR}/{name}.tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    import os
+    os.replace(tmp, f"{ASSET_DIR}/{name}.txt")
+
+def xray_flare_class(flux):
+    # Standard GOES X-ray flare classification: letter by decade,
+    # number is the mantissa within that decade.
+    if flux is None or flux <= 0:
+        return None
+    import math
+    if flux < 1e-7:
+        letter, base = "A", 1e-8
+    elif flux < 1e-6:
+        letter, base = "B", 1e-7
+    elif flux < 1e-5:
+        letter, base = "C", 1e-6
+    elif flux < 1e-4:
+        letter, base = "M", 1e-5
+    else:
+        letter, base = "X", 1e-4
+    mag = flux / base
+    return f"{letter}{mag:.1f}"
+
+# --- Solar wind speed + density ---
+try:
+    wind = fetch("/products/summary/solar-wind-speed.json") if False else fetch("/json/rtsw/rtsw_wind_1m.json")
+    speed = latest_numeric(wind, "speed")
+    density = latest_numeric(wind, "density")
+    write("wind_speed", f"{speed:,.0f} km/s" if speed is not None else " ")
+    write("wind_density", f"{density:.1f} p/cc" if density is not None else " ")
+except Exception:
+    pass
+
+# --- IMF Bz (GSM) ---
+try:
+    mag = fetch("/json/rtsw/rtsw_mag_1m.json")
+    bz = latest_numeric(mag, "bz_gsm")
+    write("bz", f"{bz:+.1f} nT" if bz is not None else " ")
+except Exception:
+    pass
+
+# --- Planetary Kp index ---
+try:
+    kp_records = fetch("/json/planetary_k_index_1m.json")
+    kp = latest_numeric(kp_records, "kp_index")
+    if kp is None:
+        kp = latest_numeric(kp_records, "estimated_kp")
+    write("kp", f"{kp:.1f}" if kp is not None else " ")
+except Exception:
+    pass
+
+# --- X-ray flare class (long/0.1-0.8nm channel) ---
+try:
+    xrays = fetch("/json/goes/primary/xrays-1-day.json")
+    long_records = [r for r in xrays if r.get("energy") == "0.1-0.8nm"]
+    flux = latest_numeric(long_records or xrays, "flux")
+    cls = xray_flare_class(flux)
+    write("xray_class", cls if cls else " ")
+except Exception:
+    pass
+PYEOF
+    (
+        while true; do
+            python3 space_weather_poll.py "$NOAA" "$ASSET_DIR" 2>/tmp/space_weather_err.log || \
+                echo "WARNING: space weather poll cycle failed — $(tail -1 /tmp/space_weather_err.log 2>/dev/null)"
+            sleep 60
+        done
+    ) &
+    SPACEWEATHER_PID=$!
+    echo "Space weather panel enabled — polling NOAA SWPC every 60s (wind speed, density, Bz, Kp, X-ray class)."
+fi
+
+trap 'kill "$CLOCK_PID" 2>/dev/null || true; [ -n "$SUBS_PID" ] && kill "$SUBS_PID" 2>/dev/null || true; [ -n "$VIEWERS_PID" ] && kill "$VIEWERS_PID" 2>/dev/null || true; [ -n "$SPACEWEATHER_PID" ] && kill "$SPACEWEATHER_PID" 2>/dev/null || true' EXIT
 
 #############################################
 # Static panel text (unchanged across videos)
@@ -732,25 +874,37 @@ prepare_video_content() {
         prev="$nxt"
     done
 
-    # ---------------- Right panel: live readings + EUV graph ----------------
-    # Same idea as the left panel's activity graph, mirrored on this
-    # side with a temperature readout on top (using the same live-number
-    # %{eif:...} trick) so both panels feel "alive" instead of static.
+    # ---------------- Right panel: live space-weather readings + EUV graph ----------------
+    # Real NOAA SWPC numbers (solar wind speed/density, IMF Bz, planetary
+    # Kp index, current X-ray flare class) fed by the background
+    # space-weather poller above, refreshed via reload=1 the same way
+    # the clock/subs/viewers lines are. Falls back to blank lines
+    # automatically if SHOW_SPACE_WEATHER=false (files stay as a single
+    # space, so drawtext just renders nothing).
     local RREAD_DIV_Y=$((RFACT_TEXT_Y + MAX_FACT_LINES * FACT_LINE_H + 16))
     local RREAD_LABEL_Y=$((RREAD_DIV_Y + 14))
     local RREAD_LINE1_Y=$((RREAD_LABEL_Y + 22))
     local RREAD_LINE2_Y=$((RREAD_LINE1_Y + 20))
-    local RGRAPH_LABEL_Y=$((RREAD_LINE2_Y + 30))
+    local RREAD_LINE3_Y=$((RREAD_LINE2_Y + 20))
+    local RREAD_LINE4_Y=$((RREAD_LINE3_Y + 20))
+    local RGRAPH_LABEL_Y=$((RREAD_LINE4_Y + 30))
     local RGRAPH_BASE_Y=$((RGRAPH_LABEL_Y + 150))
 
     CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RREAD_DIV_Y}:w=${PANEL_TEXT_W}:h=2:color=white@0.15:t=fill[rr0];"
-    CHAIN+="[rr0]drawtext=fontfile=${FONT}:text='LIVE READINGS':fontcolor=${GOLD}@0.85:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LABEL_Y}[rr1];"
-    CHAIN+="[rr1]drawtext=fontfile=${FONT}:text='SURFACE   5\,500 C':fontcolor=white@0.85:fontsize=14:x=${RTEXT_INSET}:y=${RREAD_LINE1_Y}[rr2];"
-    CHAIN+="[rr2]drawtext=fontfile=${FONT}:text='CORE   %{eif\:14900000+400000*sin(t/7)\:d} K':fontcolor=white@0.85:fontsize=14:x=${RTEXT_INSET}:y=${RREAD_LINE2_Y}[rr3];"
+    CHAIN+="[rr0]drawtext=fontfile=${FONT}:text='SPACE WEATHER (NOAA)':fontcolor=${GOLD}@0.85:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LABEL_Y}[rr0b];"
+    CHAIN+="[rr0b]drawtext=fontfile=${FONT}:text='SOLAR WIND':fontcolor=white@0.55:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LINE1_Y}[rr0c];"
+    CHAIN+="[rr0c]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/wind_speed.txt:reload=1:fontcolor=white:fontsize=14:x=$((RTEXT_INSET + 110)):y=${RREAD_LINE1_Y}[rr1];"
+    CHAIN+="[rr1]drawtext=fontfile=${FONT}:text='DENSITY':fontcolor=white@0.55:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LINE2_Y}[rr1b];"
+    CHAIN+="[rr1b]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/wind_density.txt:reload=1:fontcolor=white:fontsize=14:x=$((RTEXT_INSET + 110)):y=${RREAD_LINE2_Y}[rr2];"
+    CHAIN+="[rr2]drawtext=fontfile=${FONT}:text='BZ (GSM)':fontcolor=white@0.55:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LINE3_Y}[rr2b];"
+    CHAIN+="[rr2b]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/bz.txt:reload=1:fontcolor=white:fontsize=14:x=$((RTEXT_INSET + 110)):y=${RREAD_LINE3_Y}[rr2c];"
+    CHAIN+="[rr2c]drawtext=fontfile=${FONT}:text='KP INDEX':fontcolor=white@0.55:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LINE4_Y}[rr2d];"
+    CHAIN+="[rr2d]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/kp.txt:reload=1:fontcolor=white:fontsize=14:x=$((RTEXT_INSET + 110)):y=${RREAD_LINE4_Y}[rr3];"
     prev="rr3"
 
     CHAIN+="[${prev}]drawbox=x=$((RTEXT_INSET - 2)):y=$((RGRAPH_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[rg1];"
-    CHAIN+="[rg1]drawtext=fontfile=${FONT}:text='EUV FLUX':fontcolor=white@0.55:fontsize=11:x=$((RTEXT_INSET + 14)):y=$((RGRAPH_LABEL_Y - 8))[rg2];"
+    CHAIN+="[rg1]drawtext=fontfile=${FONT}:text='X-RAY FLARE CLASS':fontcolor=white@0.55:fontsize=11:x=$((RTEXT_INSET + 14)):y=$((RGRAPH_LABEL_Y - 8))[rg1b];"
+    CHAIN+="[rg1b]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/xray_class.txt:reload=1:fontcolor=${GOLD}:fontsize=16:x=${RTEXT_INSET}:y=$((RGRAPH_LABEL_Y + 10)):${SHADOW}[rg2];"
     prev="rg2"
 
     local RBAR_COUNT=14
@@ -816,7 +970,7 @@ build_final_filter() {
     tail+="[tk4]drawbox=x=0:y=682:w=113:h=38:color=${GOLD}:t=fill[tk5];"
     tail+="[tk5]drawtext=fontfile=${FONT}:text='LIVE NOW':fontcolor=black:fontsize=15:x=13:y=695[tk6];"
 
-    tail+="[tk6]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.45:fontsize=14:borderw=1.5:bordercolor=black@0.7:x=(w-text_w)/2:y=25[final]"
+    tail+="[tk6]drawtext=fontfile=${FONT}:text='${CHANNEL_NAME}':fontcolor=white@0.45:fontsize=14:borderw=1.5:bordercolor=black@0.7:x=(w-text_w)/2:y=657[final]"
 
     echo "$tail"
 }
