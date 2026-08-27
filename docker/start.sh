@@ -819,15 +819,12 @@ prepare_video_content() {
     build_labels_chain "$url"
     CHAIN+="$LABELS_CHAIN"
 
-    # ---------------- Center strip row dividers ----------------
-    CHAIN+="${LABELS_OUT}drawbox=x=${CENTER_X0}:y=${ROW2_Y}:w=${CENTER_W}:h=2:color=${GOLD}@0.4:t=fill[cmdiv1];"
-    CHAIN+="[cmdiv1]drawbox=x=${CENTER_X0}:y=${ROW3_Y}:w=${CENTER_W}:h=2:color=${GOLD}@0.4:t=fill[cmdiv2];"
-    CHAIN+="[cmdiv2]drawbox=x=${CENTER_X0}:y=${ROW4_Y}:w=${CENTER_W}:h=2:color=${GOLD}@0.4:t=fill[cmdiv3];"
-
     # ---------------- Row 2: "LIVE SOLAR WIND" visualization ----------------
     # Bordered "card" background (matches the side panels' framed look)
     # with interior padding, so the bar chart has a bounded area instead
     # of free-floating bars that can visually run into neighboring rows.
+    # (Cards also do the job the old plain divider lines did, so those
+    # were dropped in favor of this.)
     local CARD_PAD=10
     local CARD_X0=$((CENTER_X0 + CARD_PAD))
     local CARD_W=$((CENTER_W - CARD_PAD * 2))
