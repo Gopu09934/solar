@@ -297,11 +297,20 @@ def fetch(path):
     with urllib.request.urlopen(f"{NOAA}{path}", timeout=15) as r:
         return json.loads(r.read())
 
-def latest_numeric(records, key):
+def latest_numeric(records, key, active_only=False):
     # Walk backwards for the most recent record that actually has a
     # usable numeric value for `key` — the newest record or two is
     # often still null/pending on these real-time feeds.
+    #
+    # active_only=True restricts the search to records the feed marks
+    # "active": true. As of NOAA's March 2026 RTSW schema change
+    # (services.swpc.noaa.gov/json/rtsw/*), each minute has one row per
+    # candidate spacecraft (e.g. SOLAR1, ACE, IMAP) but only one is the
+    # officially designated real-time source at a time; mixing rows
+    # from different spacecraft gives an inconsistent-looking readout.
     for rec in reversed(records):
+        if active_only and rec.get("active") is not True:
+            continue
         v = rec.get(key)
         if v is None:
             continue
@@ -309,6 +318,18 @@ def latest_numeric(records, key):
             return float(v)
         except (TypeError, ValueError):
             continue
+    return None
+
+def latest_numeric_any_key(records, keys, active_only=False):
+    # Same as latest_numeric, but tries several possible field names in
+    # order and returns the first that resolves. Used where NOAA's exact
+    # key name for a feed couldn't be confirmed ahead of time, so the
+    # poller stays working even if the schema differs slightly from what
+    # was assumed.
+    for key in keys:
+        v = latest_numeric(records, key, active_only=active_only)
+        if v is not None:
+            return v
     return None
 
 def write(name, text):
@@ -338,10 +359,27 @@ def xray_flare_class(flux):
     return f"{letter}{mag:.1f}"
 
 # --- Solar wind speed + density ---
+# NOTE: NOAA restructured this feed in a March 2026 schema change
+# (services.swpc.noaa.gov/json/rtsw/*): each row now carries a "source"
+# (e.g. "SOLAR1", "ACE", "IMAP") and an "active" flag, and the value
+# fields were renamed from "speed"/"density" to "proton_speed"/
+# "proton_density". active_only=True keeps this reading consistent by
+# only reading the row from whichever spacecraft is currently
+# designated as the real-time source.
 try:
-    wind = fetch("/products/summary/solar-wind-speed.json") if False else fetch("/json/rtsw/rtsw_wind_1m.json")
-    speed = latest_numeric(wind, "speed")
-    density = latest_numeric(wind, "density")
+    wind = fetch("/json/rtsw/rtsw_wind_1m.json")
+    speed = latest_numeric_any_key(
+        wind, ["proton_speed", "speed"], active_only=True
+    )
+    density = latest_numeric_any_key(
+        wind, ["proton_density", "density"], active_only=True
+    )
+    # Fall back to any source (not just the active one) if the active
+    # row itself doesn't have a usable value yet.
+    if speed is None:
+        speed = latest_numeric_any_key(wind, ["proton_speed", "speed"])
+    if density is None:
+        density = latest_numeric_any_key(wind, ["proton_density", "density"])
     write("wind_speed", f"{speed:,.0f} km/s" if speed is not None else " ")
     write("wind_density", f"{density:.1f} p/cc" if density is not None else " ")
 except Exception:
@@ -350,17 +388,22 @@ except Exception:
 # --- IMF Bz (GSM) ---
 try:
     mag = fetch("/json/rtsw/rtsw_mag_1m.json")
-    bz = latest_numeric(mag, "bz_gsm")
+    bz = latest_numeric(mag, "bz_gsm", active_only=True)
+    if bz is None:
+        bz = latest_numeric(mag, "bz_gsm")
     write("bz", f"{bz:+.1f} nT" if bz is not None else " ")
 except Exception:
     pass
 
 # --- Planetary Kp index ---
+# Field name for this feed couldn't be independently confirmed while
+# writing this poller, so several plausible names are tried in order;
+# whichever one actually exists in the live feed will be picked up.
 try:
     kp_records = fetch("/json/planetary_k_index_1m.json")
-    kp = latest_numeric(kp_records, "kp_index")
-    if kp is None:
-        kp = latest_numeric(kp_records, "estimated_kp")
+    kp = latest_numeric_any_key(
+        kp_records, ["kp_index", "estimated_kp", "kp", "k_index", "Kp"]
+    )
     write("kp", f"{kp:.1f}" if kp is not None else " ")
 except Exception:
     pass
