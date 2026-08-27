@@ -825,44 +825,60 @@ prepare_video_content() {
     CHAIN+="[cmdiv2]drawbox=x=${CENTER_X0}:y=${ROW4_Y}:w=${CENTER_W}:h=2:color=${GOLD}@0.4:t=fill[cmdiv3];"
 
     # ---------------- Row 2: "LIVE SOLAR WIND" visualization ----------------
-    # Same animated-bar technique as the side panels' graphs (pure
-    # ffmpeg sine expressions, no extra data writer needed) so it's
-    # always moving even if the space-weather poller is disabled.
-    local CM2_LABEL_Y=$((ROW2_Y + 16))
-    local CM2_BASE_Y=$((ROW4_Y - 12))
-    local CM_BAR_COUNT=18
-    local CM_BAR_W=24
-    local CM_BAR_GAP=8
-    local CM_BAR_MINH=10
-    local CM_BAR_MAXH=$((ROW_H - 40))
+    # Bordered "card" background (matches the side panels' framed look)
+    # with interior padding, so the bar chart has a bounded area instead
+    # of free-floating bars that can visually run into neighboring rows.
+    local CARD_PAD=10
+    local CARD_X0=$((CENTER_X0 + CARD_PAD))
+    local CARD_W=$((CENTER_W - CARD_PAD * 2))
 
-    CHAIN+="[cmdiv3]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM2_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill:enable='lt(mod(t\,1.4)\,0.9)'[cm2a];"
-    CHAIN+="[cm2a]drawtext=fontfile=${FONT}:text='LIVE SOLAR WIND':fontcolor=white@0.7:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM2_LABEL_Y - 6))[cm2b];"
+    local CM2_Y0=$((ROW2_Y + CARD_PAD))
+    local CM2_Y1=$((ROW3_Y - CARD_PAD))
+    CHAIN+="${LABELS_OUT}drawbox=x=${CARD_X0}:y=${CM2_Y0}:w=${CARD_W}:h=$((CM2_Y1 - CM2_Y0)):color=black@0.22:t=fill[cm2card];"
+    CHAIN+="[cm2card]drawbox=x=${CARD_X0}:y=${CM2_Y0}:w=${CARD_W}:h=$((CM2_Y1 - CM2_Y0)):color=${GOLD}@0.3:t=1[cm2border];"
+
+    local CM2_LABEL_Y=$((CM2_Y0 + 20))
+    local CM2_BASE_Y=$((CM2_Y1 - 14))
+    local CM_BAR_COUNT=16
+    local CM_BAR_W=26
+    local CM_BAR_GAP=8
+    local CM_BAR_MINH=8
+    local CM_BAR_MAXH=$((CM2_BASE_Y - CM2_LABEL_Y - 20))
+
+    CHAIN+="[cm2border]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM2_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill:enable='lt(mod(t\,1.4)\,0.9)'[cm2a];"
+    CHAIN+="[cm2a]drawtext=fontfile=${FONT}:text='LIVE SOLAR WIND':fontcolor=white@0.75:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM2_LABEL_Y - 6))[cm2b];"
     local prev="cm2b"
-    local ci cbx ch_expr cy_expr cnxt
+    local ci cbx ch_expr cy_expr cnxt cnxt2
     for ((ci = 0; ci < CM_BAR_COUNT; ci++)); do
         cbx=$((MTEXT_INSET + ci * (CM_BAR_W + CM_BAR_GAP)))
-        ch_expr="clip(70+45*sin(2*PI*t/3.4+${ci}*0.5)+22*sin(2*PI*t/1.7+${ci}*0.85)\,${CM_BAR_MINH}\,${CM_BAR_MAXH})"
+        ch_expr="clip(64+40*sin(2*PI*t/3.4+${ci}*0.5)+20*sin(2*PI*t/1.7+${ci}*0.85)\,${CM_BAR_MINH}\,${CM_BAR_MAXH})"
         cy_expr="${CM2_BASE_Y}-(${ch_expr})"
         cnxt="cm2bar${ci}"
-        CHAIN+="[${prev}]drawbox=x=${cbx}:y='${cy_expr}':w=${CM_BAR_W}:h='${ch_expr}':color=${GOLD}@0.8:t=fill[${cnxt}];"
-        prev="$cnxt"
+        cnxt2="cm2cap${ci}"
+        CHAIN+="[${prev}]drawbox=x=${cbx}:y='${cy_expr}':w=${CM_BAR_W}:h='${ch_expr}':color=${GOLD}@0.7:t=fill[${cnxt}];"
+        CHAIN+="[${cnxt}]drawbox=x=${cbx}:y='${cy_expr}':w=${CM_BAR_W}:h=2:color=${GOLD}:t=fill[${cnxt2}];"
+        prev="$cnxt2"
     done
-    CHAIN+="[${prev}]drawbox=x=${MTEXT_INSET}:y=${CM2_BASE_Y}:w=$((CENTER_W - 60)):h=1:color=white@0.2:t=fill[cm2base];"
+    CHAIN+="[${prev}]drawbox=x=$((MTEXT_INSET - 4)):y=${CM2_BASE_Y}:w=$((CARD_W - 40)):h=1:color=white@0.2:t=fill[cm2base];"
     prev="cm2base"
 
     # ---------------- Row 3: mission-status info block ----------------
-    # Reuses text files already written elsewhere (clock, instrument,
-    # and the live space-weather readings) rather than adding new
-    # writers — this is just a compact re-display of live data.
-    local CM3_LABEL_Y=$((ROW3_Y + 16))
-    local CM3_LINE1_Y=$((CM3_LABEL_Y + 26))
-    local CM3_LINE2_Y=$((CM3_LINE1_Y + 22))
-    local CM3_LINE3_Y=$((CM3_LINE2_Y + 22))
-    local CM3_LINE4_Y=$((CM3_LINE3_Y + 22))
-    local CM3_LINE5_Y=$((CM3_LINE4_Y + 22))
+    # Same card treatment as rows 2 and 4, with a two-column label:value
+    # layout mirroring the side panels' style instead of loose text.
+    local CM3_Y0=$((ROW3_Y + CARD_PAD))
+    local CM3_Y1=$((ROW4_Y - CARD_PAD))
+    CHAIN+="[${prev}]drawbox=x=${CARD_X0}:y=${CM3_Y0}:w=${CARD_W}:h=$((CM3_Y1 - CM3_Y0)):color=black@0.22:t=fill[cm3card];"
+    CHAIN+="[cm3card]drawbox=x=${CARD_X0}:y=${CM3_Y0}:w=${CARD_W}:h=$((CM3_Y1 - CM3_Y0)):color=${GOLD}@0.3:t=1[cm3border];"
 
-    CHAIN+="[cm2base]drawtext=fontfile=${FONT}:text='MISSION STATUS':fontcolor=${GOLD}@0.85:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LABEL_Y}[cm3a];"
+    local CM3_LABEL_Y=$((CM3_Y0 + 20))
+    local CM3_LINE1_Y=$((CM3_LABEL_Y + 28))
+    local CM3_LINE2_Y=$((CM3_LINE1_Y + 24))
+    local CM3_LINE3_Y=$((CM3_LINE2_Y + 24))
+    local CM3_LINE4_Y=$((CM3_LINE3_Y + 24))
+    local CM3_LINE5_Y=$((CM3_LINE4_Y + 24))
+
+    CHAIN+="[cm3border]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM3_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill[cm3z];"
+    CHAIN+="[cm3z]drawtext=fontfile=${FONT}:text='MISSION STATUS':fontcolor=${GOLD}@0.85:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM3_LABEL_Y - 6))[cm3a];"
     CHAIN+="[cm3a]drawtext=fontfile=${FONT}:text='INSTRUMENT':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE1_Y}[cm3b];"
     CHAIN+="[cm3b]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/instr_title.txt:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE1_Y}[cm3c];"
     CHAIN+="[cm3c]drawtext=fontfile=${FONT}:text='UTC TIME':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE2_Y}[cm3d];"
@@ -871,31 +887,43 @@ prepare_video_content() {
     CHAIN+="[cm3f]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/wind_speed.txt:reload=1:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE3_Y}[cm3g];"
     CHAIN+="[cm3g]drawtext=fontfile=${FONT}:text='BZ / KP':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE4_Y}[cm3h];"
     CHAIN+="[cm3h]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/bz.txt:reload=1:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE4_Y}[cm3i];"
-    CHAIN+="[cm3i]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/kp.txt:reload=1:fontcolor=white:fontsize=14:x=$((MVALUE_X + 80)):y=${CM3_LINE4_Y}[cm3j];"
+    CHAIN+="[cm3i]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/kp.txt:reload=1:fontcolor=white:fontsize=14:x=$((MVALUE_X + 90)):y=${CM3_LINE4_Y}[cm3j];"
     CHAIN+="[cm3j]drawtext=fontfile=${FONT}:text='X-RAY FLARE':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE5_Y}[cm3k];"
     CHAIN+="[cm3k]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/xray_class.txt:reload=1:fontcolor=${GOLD}:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE5_Y}[cm3final];"
     prev="cm3final"
 
     # ---------------- Row 4: "GEOMAGNETIC ACTIVITY" visualization ----------------
-    # Same bar technique as row 2, different phase/frequency so the two
-    # visualizations don't look identical, and stopped short of the
-    # bottom ticker (y=680) so it doesn't visually collide with it.
-    local CM4_LABEL_Y=$((ROW4_Y + 16))
-    local CM4_BASE_Y=670
+    # Deliberately styled differently from row 2's chart, not just a
+    # recolor: thinner, denser, two-tone gold/red bars (evoking aurora
+    # colors) on a red-bordered card, so the two visualizations don't
+    # read as the same graph repeated. Stops short of the bottom ticker
+    # (y=680) so it doesn't visually collide with it.
+    local CM4_Y0=$((ROW4_Y + CARD_PAD))
+    local CM4_Y1=$((680 - CARD_PAD))
+    CHAIN+="[${prev}]drawbox=x=${CARD_X0}:y=${CM4_Y0}:w=${CARD_W}:h=$((CM4_Y1 - CM4_Y0)):color=black@0.22:t=fill[cm4card];"
+    CHAIN+="[cm4card]drawbox=x=${CARD_X0}:y=${CM4_Y0}:w=${CARD_W}:h=$((CM4_Y1 - CM4_Y0)):color=${RED}@0.3:t=1[cm4border];"
 
-    CHAIN+="[${prev}]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM4_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[cm4a];"
-    CHAIN+="[cm4a]drawtext=fontfile=${FONT}:text='GEOMAGNETIC ACTIVITY':fontcolor=white@0.7:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM4_LABEL_Y - 6))[cm4b];"
+    local CM4_LABEL_Y=$((CM4_Y0 + 20))
+    local CM4_BASE_Y=$((CM4_Y1 - 14))
+    local CM4_BAR_COUNT=26
+    local CM4_BAR_W=14
+    local CM4_BAR_GAP=6
+    local CM4_BAR_MAXH=$((CM4_BASE_Y - CM4_LABEL_Y - 20))
+
+    CHAIN+="[cm4border]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM4_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[cm4a];"
+    CHAIN+="[cm4a]drawtext=fontfile=${FONT}:text='GEOMAGNETIC ACTIVITY':fontcolor=white@0.75:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM4_LABEL_Y - 6))[cm4b];"
     prev="cm4b"
-    local di dbx dh_expr dy_expr dnxt
-    for ((di = 0; di < CM_BAR_COUNT; di++)); do
-        dbx=$((MTEXT_INSET + di * (CM_BAR_W + CM_BAR_GAP)))
-        dh_expr="clip(60+36*sin(2*PI*t/2.9+${di}*0.65)+20*sin(2*PI*t/1.5+${di}*1.05)\,${CM_BAR_MINH}\,${CM_BAR_MAXH})"
+    local di dbx dh_expr dy_expr dnxt dcolor
+    for ((di = 0; di < CM4_BAR_COUNT; di++)); do
+        dbx=$((MTEXT_INSET + di * (CM4_BAR_W + CM4_BAR_GAP)))
+        dh_expr="clip(58+34*sin(2*PI*t/2.6+${di}*0.6)+18*sin(2*PI*t/1.35+${di}*1.0)\,${CM_BAR_MINH}\,${CM4_BAR_MAXH})"
         dy_expr="${CM4_BASE_Y}-(${dh_expr})"
         dnxt="cm4bar${di}"
-        CHAIN+="[${prev}]drawbox=x=${dbx}:y='${dy_expr}':w=${CM_BAR_W}:h='${dh_expr}':color=${GOLD}@0.75:t=fill[${dnxt}];"
+        if (( di % 2 == 0 )); then dcolor="${GOLD}@0.65"; else dcolor="${RED}@0.55"; fi
+        CHAIN+="[${prev}]drawbox=x=${dbx}:y='${dy_expr}':w=${CM4_BAR_W}:h='${dh_expr}':color=${dcolor}:t=fill[${dnxt}];"
         prev="$dnxt"
     done
-    CHAIN+="[${prev}]drawbox=x=${MTEXT_INSET}:y=${CM4_BASE_Y}:w=$((CENTER_W - 60)):h=1:color=white@0.2:t=fill[cm4base];"
+    CHAIN+="[${prev}]drawbox=x=$((MTEXT_INSET - 4)):y=${CM4_BASE_Y}:w=$((CARD_W - 40)):h=1:color=white@0.2:t=fill[cm4base];"
 
     # ---------------- Left panel: story / headlines ----------------
     CHAIN+="[cm4base]drawbox=x=0:y=0:w=${PANEL_W}:h=720:color=black@0.92:t=fill[p1];"
