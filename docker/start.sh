@@ -180,10 +180,7 @@ AUDIO_COUNTER=0   # persists across the whole run; advances one track per video
 # 30fps rather than whatever a default would be.
 #############################################
 PANEL_IMAGE_URLS=(
-    "https://github.com/Gopu09934/solar/releases/download/as/sun1.jpg"
-    "https://github.com/Gopu09934/solar/releases/download/as/earth1.jpg"
-    "https://github.com/Gopu09934/solar/releases/download/as/sun2.jpg"
-    "https://github.com/Gopu09934/solar/releases/download/as/earth2.jpg"
+    "https://github.com/Gopu09934/solar/releases/download/as/sun2.jpg" 
 )
 PANEL_IMAGE_LOCAL_FILES=()
 pimg_i=0
@@ -1389,8 +1386,6 @@ run_video() {
     local PANEL_IMG_INPUT_ARGS=()
     if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
         PANEL_IMG_INPUT_ARGS=(
-            -loop 1 -framerate 30 -i "$LEFT_PANEL_IMG"
-            -loop 1 -framerate 30 -i "$RIGHT_PANEL_IMG"
             -loop 1 -framerate 30 -i "$MID_PANEL_IMG"
         )
     fi
