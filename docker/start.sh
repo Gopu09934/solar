@@ -951,13 +951,15 @@ prepare_video_content() {
     if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
         local MID_X0=$((MTEXT_INSET + 400))
         local MID_AVAIL_W=$(((CARD_X0 + CARD_W - 14) - MID_X0))
-        local MID_AVAIL_H=$(((CM3_Y1 - 14) - (CM3_LABEL_Y + 14)))
+        local MID_TOP=$((CM3_LABEL_Y + 14 + 14))
+        local MID_BOTTOM=$((CM3_Y1 - 16))
+        local MID_AVAIL_H=$((MID_BOTTOM - MID_TOP))
         if [ "$MID_AVAIL_W" -ge 90 ] && [ "$MID_AVAIL_H" -ge 90 ]; then
             local MTHUMB=$MID_AVAIL_W
             [ "$MID_AVAIL_H" -lt "$MTHUMB" ] && MTHUMB=$MID_AVAIL_H
             [ "$MTHUMB" -gt 130 ] && MTHUMB=130
             local MTX=$((MID_X0 + (MID_AVAIL_W - MTHUMB) / 2))
-            local MTY=$(((CM3_LABEL_Y + 14) + (MID_AVAIL_H - MTHUMB) / 2))
+            local MTY=$((MID_TOP + (MID_AVAIL_H - MTHUMB) / 2))
             CHAIN+="[${prev}]drawbox=x=$((MTX - 4)):y=$((MTY - 4)):w=$((MTHUMB + 8)):h=$((MTHUMB + 8)):color=black@0.6:t=fill[mthumbbg];"
             CHAIN+="[mthumbbg]drawbox=x=$((MTX - 4)):y=$((MTY - 4)):w=$((MTHUMB + 8)):h=$((MTHUMB + 8)):color=${GOLD}@0.5:t=1[mthumbborder];"
             CHAIN+="[5:v]scale=${MTHUMB}:${MTHUMB}:force_original_aspect_ratio=increase,crop=${MTHUMB}:${MTHUMB}[mimg];"
@@ -1062,13 +1064,26 @@ prepare_video_content() {
     # per bar, clipped to a min/max height) — no extra background writer
     # needed, and drawbox re-evaluates x/y/w/h every frame so it never
     # looks frozen the way a static overlay would.
+    #
+    # The thumbnail below is now given a FIXED zone (THUMB_ZONE_TOP to
+    # THUMB_ZONE_BOTTOM) instead of "whatever's left after the graph" —
+    # long headlines wrap to more lines often enough that the old
+    # leftover-space approach left the thumbnail skipped most of the
+    # time. The graph's own height now adapts (shrinks) to whatever
+    # room remains above the reserved zone instead, so the thumbnail
+    # reliably shows every video.
+    local THUMB_ZONE_TOP=545
+    local THUMB_ZONE_BOTTOM=700
     local GRAPH_LABEL_Y=$((DOTS_Y + 40))
     local GRAPH_BASE_Y=$((GRAPH_LABEL_Y + 160))
+    [ "$GRAPH_BASE_Y" -gt $((THUMB_ZONE_TOP - 15)) ] && GRAPH_BASE_Y=$((THUMB_ZONE_TOP - 15))
+    [ "$GRAPH_BASE_Y" -lt $((GRAPH_LABEL_Y + 30)) ] && GRAPH_BASE_Y=$((GRAPH_LABEL_Y + 30))
     local BAR_COUNT=14
     local BAR_W=13
     local BAR_GAP=6
     local BAR_MINH=8
-    local BAR_MAXH=100
+    local BAR_MAXH=$((GRAPH_BASE_Y - GRAPH_LABEL_Y - 20))
+    [ "$BAR_MAXH" -lt 10 ] && BAR_MAXH=10
 
     CHAIN+="[${prev}]drawbox=x=$((TEXT_INSET - 2)):y=$((GRAPH_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill:enable='lt(mod(t\,1.4)\,0.9)'[sa1];"
     CHAIN+="[sa1]drawtext=fontfile=${FONT}:text='SOLAR ACTIVITY':fontcolor=white@0.55:fontsize=11:x=$((TEXT_INSET + 14)):y=$((GRAPH_LABEL_Y - 8))[sa2];"
@@ -1088,26 +1103,20 @@ prepare_video_content() {
     prev="sabase"
 
     # ---------------- Left panel: framed Earth/Sun thumbnail ----------------
-    # Placed in the vacant space below the solar-activity graph — only
-    # drawn when there's actually enough room left, since a long
-    # headline wraps to more lines and pushes the graph (and this gap)
-    # down; if a video's headline eats too much of that margin, the
-    # thumbnail is simply skipped for that video rather than overlap.
+    # Fixed zone (see above) — always drawn, doesn't depend on how much
+    # room the graph left behind.
     if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
-        local LTOP=$((GRAPH_BASE_Y + 15))
-        local LAVAIL_H=$((700 - LTOP))
-        if [ "$LAVAIL_H" -ge 90 ]; then
-            local LTHUMB=$LAVAIL_H
-            [ "$LTHUMB" -gt 140 ] && LTHUMB=140
-            [ "$LTHUMB" -gt "$PANEL_TEXT_W" ] && LTHUMB=$PANEL_TEXT_W
-            local LTX=$((TEXT_INSET + (PANEL_TEXT_W - LTHUMB) / 2))
-            local LTY=$LTOP
-            CHAIN+="[${prev}]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=black@0.6:t=fill[lthumbbg];"
-            CHAIN+="[lthumbbg]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=${GOLD}@0.5:t=1[lthumbborder];"
-            CHAIN+="[3:v]scale=${LTHUMB}:${LTHUMB}:force_original_aspect_ratio=increase,crop=${LTHUMB}:${LTHUMB}[limg];"
-            CHAIN+="[lthumbborder][limg]overlay=x=${LTX}:y=${LTY}[lthumbfinal];"
-            prev="lthumbfinal"
-        fi
+        local LAVAIL_H=$((THUMB_ZONE_BOTTOM - THUMB_ZONE_TOP))
+        local LTHUMB=$LAVAIL_H
+        [ "$LTHUMB" -gt 140 ] && LTHUMB=140
+        [ "$LTHUMB" -gt "$PANEL_TEXT_W" ] && LTHUMB=$PANEL_TEXT_W
+        local LTX=$((TEXT_INSET + (PANEL_TEXT_W - LTHUMB) / 2))
+        local LTY=$((THUMB_ZONE_TOP + (LAVAIL_H - LTHUMB) / 2))
+        CHAIN+="[${prev}]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=black@0.6:t=fill[lthumbbg];"
+        CHAIN+="[lthumbbg]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=${GOLD}@0.5:t=1[lthumbborder];"
+        CHAIN+="[3:v]scale=${LTHUMB}:${LTHUMB}:force_original_aspect_ratio=increase,crop=${LTHUMB}:${LTHUMB}[limg];"
+        CHAIN+="[lthumbborder][limg]overlay=x=${LTX}:y=${LTY}[lthumbfinal];"
+        prev="lthumbfinal"
     fi
 
     # ---------------- Right panel: stats + instrument + facts ----------------
@@ -1155,6 +1164,8 @@ prepare_video_content() {
     local RREAD_LINE4_Y=$((RREAD_LINE3_Y + 20))
     local RGRAPH_LABEL_Y=$((RREAD_LINE4_Y + 30))
     local RGRAPH_BASE_Y=$((RGRAPH_LABEL_Y + 150))
+    [ "$RGRAPH_BASE_Y" -gt $((THUMB_ZONE_TOP - 15)) ] && RGRAPH_BASE_Y=$((THUMB_ZONE_TOP - 15))
+    [ "$RGRAPH_BASE_Y" -lt $((RGRAPH_LABEL_Y + 30)) ] && RGRAPH_BASE_Y=$((RGRAPH_LABEL_Y + 30))
 
     CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RREAD_DIV_Y}:w=${PANEL_TEXT_W}:h=2:color=white@0.15:t=fill[rr0];"
     CHAIN+="[rr0]drawtext=fontfile=${FONT}:text='SPACE WEATHER (NOAA)':fontcolor=${GOLD}@0.85:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LABEL_Y}[rr0b];"
@@ -1177,7 +1188,8 @@ prepare_video_content() {
     local RBAR_W=13
     local RBAR_GAP=6
     local RBAR_MINH=8
-    local RBAR_MAXH=100
+    local RBAR_MAXH=$((RGRAPH_BASE_Y - RGRAPH_LABEL_Y - 20))
+    [ "$RBAR_MAXH" -lt 10 ] && RBAR_MAXH=10
     local ri rbx rh_expr ry_expr rnxt
     for ((ri = 0; ri < RBAR_COUNT; ri++)); do
         rbx=$((RTEXT_INSET + ri * (RBAR_W + RBAR_GAP)))
@@ -1191,23 +1203,19 @@ prepare_video_content() {
     prev="rgbase"
 
     # ---------------- Right panel: framed Earth/Sun thumbnail ----------------
-    # Same idea and same skip-if-too-tight logic as the left panel's
-    # thumbnail, in the space below the EUV flux graph.
+    # Same fixed zone as the left panel's thumbnail — always drawn.
     if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
-        local RTOP=$((RGRAPH_BASE_Y + 15))
-        local RAVAIL_H=$((700 - RTOP))
-        if [ "$RAVAIL_H" -ge 90 ]; then
-            local RTHUMB=$RAVAIL_H
-            [ "$RTHUMB" -gt 140 ] && RTHUMB=140
-            [ "$RTHUMB" -gt "$PANEL_TEXT_W" ] && RTHUMB=$PANEL_TEXT_W
-            local RTX=$((RTEXT_INSET + (PANEL_TEXT_W - RTHUMB) / 2))
-            local RTY=$RTOP
-            CHAIN+="[${prev}]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=black@0.6:t=fill[rthumbbg];"
-            CHAIN+="[rthumbbg]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=${GOLD}@0.5:t=1[rthumbborder];"
-            CHAIN+="[4:v]scale=${RTHUMB}:${RTHUMB}:force_original_aspect_ratio=increase,crop=${RTHUMB}:${RTHUMB}[rimg];"
-            CHAIN+="[rthumbborder][rimg]overlay=x=${RTX}:y=${RTY}[rthumbfinal];"
-            prev="rthumbfinal"
-        fi
+        local RAVAIL_H=$((THUMB_ZONE_BOTTOM - THUMB_ZONE_TOP))
+        local RTHUMB=$RAVAIL_H
+        [ "$RTHUMB" -gt 140 ] && RTHUMB=140
+        [ "$RTHUMB" -gt "$PANEL_TEXT_W" ] && RTHUMB=$PANEL_TEXT_W
+        local RTX=$((RTEXT_INSET + (PANEL_TEXT_W - RTHUMB) / 2))
+        local RTY=$((THUMB_ZONE_TOP + (RAVAIL_H - RTHUMB) / 2))
+        CHAIN+="[${prev}]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=black@0.6:t=fill[rthumbbg];"
+        CHAIN+="[rthumbbg]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=${GOLD}@0.5:t=1[rthumbborder];"
+        CHAIN+="[4:v]scale=${RTHUMB}:${RTHUMB}:force_original_aspect_ratio=increase,crop=${RTHUMB}:${RTHUMB}[rimg];"
+        CHAIN+="[rthumbborder][rimg]overlay=x=${RTX}:y=${RTY}[rthumbfinal];"
+        prev="rthumbfinal"
     fi
 
     BASE_CHAIN="$CHAIN"
