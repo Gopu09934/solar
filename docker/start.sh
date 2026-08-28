@@ -106,6 +106,7 @@ VIEWER_MIN_TO_SHOW=10
 #############################################
 MAX_RETRIES=5       # per-video retry attempts before moving on
 RETRY_DELAY=5        # seconds between retries
+IMAGE_SLIDE_SECONDS="${IMAGE_SLIDE_SECONDS:-25}"  # how long a static image slide stays up
 
 mkdir -p "$ASSET_DIR"
 
@@ -158,6 +159,54 @@ else
     echo "WARNING: no background audio tracks downloaded — stream will run with silent audio instead."
 fi
 AUDIO_COUNTER=0   # persists across the whole run; advances one track per video
+
+#############################################
+# Panel decoration images (Earth / Sun stills)
+#
+# NOT part of the video rotation — these are
+# small static thumbnails placed into otherwise
+# empty space: below the left panel's solar-
+# activity graph, below the right panel's EUV
+# flux graph, and in the unused horizontal gap
+# to the right of the text in the center strip's
+# "MISSION STATUS" card. URLs are hardcoded
+# per request rather than env-configurable.
+#
+# Downloaded once here (same reasoning as the
+# background-audio downloads above) and fed to
+# ffmpeg with -loop 1 -framerate 30 further
+# down, so — like the image-slide feature —
+# they're always composited at a clean, steady
+# 30fps rather than whatever a default would be.
+#############################################
+PANEL_IMAGE_URLS=(
+    "https://github.com/Gopu09934/solar/releases/download/as/sun1.jpg"
+    "https://github.com/Gopu09934/solar/releases/download/as/earth1.jpg"
+    "https://github.com/Gopu09934/solar/releases/download/as/sun2.jpg"
+    "https://github.com/Gopu09934/solar/releases/download/as/earth2.jpg"
+)
+PANEL_IMAGE_LOCAL_FILES=()
+pimg_i=0
+for piu in "${PANEL_IMAGE_URLS[@]}"; do
+    pimg_i=$((pimg_i + 1))
+    dest="panel_img_${pimg_i}.jpg"
+    echo "Downloading panel image ${pimg_i} ($(basename "$piu"))..."
+    if curl -sL --fail -o "$dest" "$piu" && [ -s "$dest" ]; then
+        PANEL_IMAGE_LOCAL_FILES+=("$dest")
+        echo "  OK ($(du -h "$dest" | cut -f1))"
+    else
+        echo "  WARNING: failed to download panel image ${pimg_i} — panel thumbnails will be skipped."
+    fi
+done
+NUM_PANEL_IMAGES=${#PANEL_IMAGE_LOCAL_FILES[@]}
+PANEL_IMAGES_AVAILABLE=false
+if [ "$NUM_PANEL_IMAGES" -gt 0 ]; then
+    PANEL_IMAGES_AVAILABLE=true
+    echo "Loaded $NUM_PANEL_IMAGES panel thumbnail(s); rotating across left/right/center slots."
+else
+    echo "WARNING: no panel thumbnails downloaded — left/right/center panel image slots will stay empty."
+fi
+PANEL_IMAGE_COUNTER=0   # persists across the whole run; rotates which image lands in which slot
 
 #############################################
 # Generate the coordinate-label marker dot once
@@ -702,6 +751,21 @@ prepare_video_content() {
     # See build_labels_chain() for why every loop var here must be `local`.
     local i idx
 
+    #########################################
+    # Rotate which panel thumbnail lands in which slot (left/right/
+    # center) this video, so all 4 downloaded images get used across
+    # the rotation instead of the same 3 repeating forever. Sets
+    # globals (not local) because run_video() needs these paths after
+    # this function returns, to build the matching ffmpeg -i args.
+    #########################################
+    if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
+        LEFT_PANEL_IMG="${PANEL_IMAGE_LOCAL_FILES[$((PANEL_IMAGE_COUNTER % NUM_PANEL_IMAGES))]}"
+        RIGHT_PANEL_IMG="${PANEL_IMAGE_LOCAL_FILES[$(((PANEL_IMAGE_COUNTER + 1) % NUM_PANEL_IMAGES))]}"
+        MID_PANEL_IMG="${PANEL_IMAGE_LOCAL_FILES[$(((PANEL_IMAGE_COUNTER + 2) % NUM_PANEL_IMAGES))]}"
+        PANEL_IMAGE_COUNTER=$((PANEL_IMAGE_COUNTER + 3))
+        echo "Panel thumbnails this video — left: $LEFT_PANEL_IMG, right: $RIGHT_PANEL_IMG, center: $MID_PANEL_IMG"
+    fi
+
     RAW_LINES=()
     if [ -f "${base}.headlines.txt" ]; then
         echo "Using curated headlines: ${base}.headlines.txt"
@@ -879,6 +943,29 @@ prepare_video_content() {
     CHAIN+="[cm3k]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/xray_class.txt:reload=1:fontcolor=${GOLD}:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE5_Y}[cm3final];"
     prev="cm3final"
 
+    # ---------------- Center strip: framed Earth/Sun thumbnail ----------------
+    # The Mission Status card's label:value text only uses the left
+    # ~400px of the card's width — this fills the vacant space to the
+    # right of it with a small framed thumbnail instead of leaving it
+    # empty.
+    if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
+        local MID_X0=$((MTEXT_INSET + 400))
+        local MID_AVAIL_W=$(((CARD_X0 + CARD_W - 14) - MID_X0))
+        local MID_AVAIL_H=$(((CM3_Y1 - 14) - (CM3_LABEL_Y + 14)))
+        if [ "$MID_AVAIL_W" -ge 90 ] && [ "$MID_AVAIL_H" -ge 90 ]; then
+            local MTHUMB=$MID_AVAIL_W
+            [ "$MID_AVAIL_H" -lt "$MTHUMB" ] && MTHUMB=$MID_AVAIL_H
+            [ "$MTHUMB" -gt 130 ] && MTHUMB=130
+            local MTX=$((MID_X0 + (MID_AVAIL_W - MTHUMB) / 2))
+            local MTY=$(((CM3_LABEL_Y + 14) + (MID_AVAIL_H - MTHUMB) / 2))
+            CHAIN+="[${prev}]drawbox=x=$((MTX - 4)):y=$((MTY - 4)):w=$((MTHUMB + 8)):h=$((MTHUMB + 8)):color=black@0.6:t=fill[mthumbbg];"
+            CHAIN+="[mthumbbg]drawbox=x=$((MTX - 4)):y=$((MTY - 4)):w=$((MTHUMB + 8)):h=$((MTHUMB + 8)):color=${GOLD}@0.5:t=1[mthumbborder];"
+            CHAIN+="[5:v]scale=${MTHUMB}:${MTHUMB}:force_original_aspect_ratio=increase,crop=${MTHUMB}:${MTHUMB}[mimg];"
+            CHAIN+="[mthumbborder][mimg]overlay=x=${MTX}:y=${MTY}[mthumbfinal];"
+            prev="mthumbfinal"
+        fi
+    fi
+
     # ---------------- Row 3: "GEOMAGNETIC ACTIVITY" visualization ----------------
     # Two-tone gold/red bars (evoking aurora colors) on a red-bordered
     # card. Bounded to end at y=680 (CARD_PAD above the bottom ticker)
@@ -1000,6 +1087,29 @@ prepare_video_content() {
     CHAIN+="[${prev}]drawbox=x=${TEXT_INSET}:y=${GRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[sabase];"
     prev="sabase"
 
+    # ---------------- Left panel: framed Earth/Sun thumbnail ----------------
+    # Placed in the vacant space below the solar-activity graph — only
+    # drawn when there's actually enough room left, since a long
+    # headline wraps to more lines and pushes the graph (and this gap)
+    # down; if a video's headline eats too much of that margin, the
+    # thumbnail is simply skipped for that video rather than overlap.
+    if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
+        local LTOP=$((GRAPH_BASE_Y + 15))
+        local LAVAIL_H=$((700 - LTOP))
+        if [ "$LAVAIL_H" -ge 90 ]; then
+            local LTHUMB=$LAVAIL_H
+            [ "$LTHUMB" -gt 140 ] && LTHUMB=140
+            [ "$LTHUMB" -gt "$PANEL_TEXT_W" ] && LTHUMB=$PANEL_TEXT_W
+            local LTX=$((TEXT_INSET + (PANEL_TEXT_W - LTHUMB) / 2))
+            local LTY=$LTOP
+            CHAIN+="[${prev}]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=black@0.6:t=fill[lthumbbg];"
+            CHAIN+="[lthumbbg]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=${GOLD}@0.5:t=1[lthumbborder];"
+            CHAIN+="[3:v]scale=${LTHUMB}:${LTHUMB}:force_original_aspect_ratio=increase,crop=${LTHUMB}:${LTHUMB}[limg];"
+            CHAIN+="[lthumbborder][limg]overlay=x=${LTX}:y=${LTY}[lthumbfinal];"
+            prev="lthumbfinal"
+        fi
+    fi
+
     # ---------------- Right panel: stats + instrument + facts ----------------
     CHAIN+="[${prev}]drawbox=x=${RIGHT_X0}:y=0:w=${PANEL_W}:h=720:color=black@0.92:t=fill[r1];"
     CHAIN+="[r1]drawbox=x=$((RIGHT_X0 - 3)):y=0:w=3:h=720:color=${GOLD}@0.75:t=fill[r2];"
@@ -1080,6 +1190,26 @@ prepare_video_content() {
     CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RGRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[rgbase];"
     prev="rgbase"
 
+    # ---------------- Right panel: framed Earth/Sun thumbnail ----------------
+    # Same idea and same skip-if-too-tight logic as the left panel's
+    # thumbnail, in the space below the EUV flux graph.
+    if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
+        local RTOP=$((RGRAPH_BASE_Y + 15))
+        local RAVAIL_H=$((700 - RTOP))
+        if [ "$RAVAIL_H" -ge 90 ]; then
+            local RTHUMB=$RAVAIL_H
+            [ "$RTHUMB" -gt 140 ] && RTHUMB=140
+            [ "$RTHUMB" -gt "$PANEL_TEXT_W" ] && RTHUMB=$PANEL_TEXT_W
+            local RTX=$((RTEXT_INSET + (PANEL_TEXT_W - RTHUMB) / 2))
+            local RTY=$RTOP
+            CHAIN+="[${prev}]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=black@0.6:t=fill[rthumbbg];"
+            CHAIN+="[rthumbbg]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=${GOLD}@0.5:t=1[rthumbborder];"
+            CHAIN+="[4:v]scale=${RTHUMB}:${RTHUMB}:force_original_aspect_ratio=increase,crop=${RTHUMB}:${RTHUMB}[rimg];"
+            CHAIN+="[rthumbborder][rimg]overlay=x=${RTX}:y=${RTY}[rthumbfinal];"
+            prev="rthumbfinal"
+        fi
+    fi
+
     BASE_CHAIN="$CHAIN"
     FACT_END="$prev"
 }
@@ -1132,6 +1262,50 @@ build_final_filter() {
 }
 
 #############################################
+# is_image_url: true if the URL's file
+# extension marks it as a static image (jpg,
+# jpeg, png, gif, bmp, webp) rather than a
+# video file. Case-insensitive, ignores any
+# query string on the URL.
+#############################################
+is_image_url() {
+    local u="${1%%\?*}"
+    local ext="${u##*.}"
+    ext="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+    case "$ext" in
+        jpg|jpeg|png|gif|bmp|webp) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+#############################################
+# get_image_local_path: downloads a static
+# image URL once into a local cache file named
+# after its basename, then prints that local
+# path on stdout. Repeats of the same image
+# later in the 24/7 rotation reuse the cached
+# file instead of re-fetching it every cycle —
+# same reasoning as the background-audio
+# downloads at startup. Returns non-zero (and
+# prints nothing) if the download fails.
+#############################################
+get_image_local_path() {
+    local url="$1"
+    local base="${url##*/}"
+    base="${base%%\?*}"
+    local dest="img_cache_${base}"
+    if [ ! -s "$dest" ]; then
+        echo "Downloading image slide: $base" >&2
+        if ! curl -sL --fail -o "$dest" "$url"; then
+            rm -f "$dest"
+            return 1
+        fi
+    fi
+    echo "$dest"
+    return 0
+}
+
+#############################################
 #############################################
 # Stream one video with automatic retry on
 # failure/crash (e.g. Bus error, network drop),
@@ -1141,16 +1315,44 @@ run_video() {
     local url="$1"
     local attempt=1
 
+    # Static images (earth1.jpg, sun1.jpg, etc.) are handled completely
+    # differently from real video files: no natural duration to probe,
+    # no network reconnect logic needed, and they must be explicitly
+    # pinned to 30fps + a fixed on-screen duration rather than relying
+    # on the source's own framerate/length like a real video clip does.
+    local is_image=false
+    local stream_source="$url"
+    if is_image_url "$url"; then
+        is_image=true
+        local local_img
+        if ! local_img=$(get_image_local_path "$url"); then
+            echo "WARNING: failed to download image slide '$url' — skipping it."
+            return 1
+        fi
+        stream_source="$local_img"
+        echo "Image slide: $url -> $stream_source"
+    fi
+
     prepare_video_content "$url"
 
     local duration
-    duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$url" 2>/dev/null || echo "")
-    duration=${duration%.*}
-    [[ "$duration" =~ ^[0-9]+$ ]] || duration=""
-    if [ -n "$duration" ]; then
-        echo "Probed duration: ${duration}s"
+    if [ "$is_image" = true ]; then
+        # No ffprobe here — a still image has no intrinsic duration.
+        # IMAGE_SLIDE_SECONDS both drives the "Next view in Ns" countdown
+        # (build_final_filter already accepts any positive integer) and
+        # is used below as a hard -t cutoff, since a looped image input
+        # never reaches EOF on its own the way a real video does.
+        duration="$IMAGE_SLIDE_SECONDS"
+        echo "Static image slide — showing for ${duration}s, locked to 30fps."
     else
-        echo "Could not probe duration — countdown will show generic filler text."
+        duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$url" 2>/dev/null || echo "")
+        duration=${duration%.*}
+        [[ "$duration" =~ ^[0-9]+$ ]] || duration=""
+        if [ -n "$duration" ]; then
+            echo "Probed duration: ${duration}s"
+        else
+            echo "Could not probe duration — countdown will show generic filler text."
+        fi
     fi
 
     local filter
@@ -1169,23 +1371,53 @@ run_video() {
         AUDIO_INPUT_ARGS=(-f lavfi -i "anullsrc=r=48000:cl=stereo")
     fi
 
+    # Panel-thumbnail inputs (indices 3, 4, 5 — right after 0:main,
+    # 1:dot-marker, 2:audio). Fixed -framerate 30 per slot, same reason
+    # as the main image-slide input above: a steady, explicit 30fps
+    # instead of a decoder default. Only added at all when downloads
+    # succeeded at startup; the filter graph itself was built with the
+    # matching PANEL_IMAGES_AVAILABLE check, so the two always agree on
+    # whether inputs 3/4/5 exist.
+    local PANEL_IMG_INPUT_ARGS=()
+    if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
+        PANEL_IMG_INPUT_ARGS=(
+            -loop 1 -framerate 30 -i "$LEFT_PANEL_IMG"
+            -loop 1 -framerate 30 -i "$RIGHT_PANEL_IMG"
+            -loop 1 -framerate 30 -i "$MID_PANEL_IMG"
+        )
+    fi
+
     while [ "$attempt" -le "$MAX_RETRIES" ]; do
         echo "----------------------------------------"
         echo "Streaming (attempt ${attempt}/${MAX_RETRIES}):"
         echo "$url"
         echo "----------------------------------------"
 
+        # Main input: a real video is read live with -re (paced at its
+        # own native framerate) plus reconnect flags for network drops.
+        # A static image is instead looped locally at an explicit,
+        # fixed -framerate 30 — this is the actual fix for "images must
+        # run at 30fps" — and since a looped image never reaches EOF on
+        # its own, EXTRA_OUTPUT_ARGS adds a hard -t cutoff so the ffmpeg
+        # process still exits normally after IMAGE_SLIDE_SECONDS, the
+        # same way a real video's natural end normally exits it.
+        local MAIN_INPUT_ARGS=()
+        local EXTRA_OUTPUT_ARGS=()
+        if [ "$is_image" = true ]; then
+            MAIN_INPUT_ARGS=(-loop 1 -framerate 30 -i "$stream_source")
+            EXTRA_OUTPUT_ARGS=(-t "$duration")
+        else
+            MAIN_INPUT_ARGS=(-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -re -i "$stream_source")
+        fi
+
         set +e
         ffmpeg \
         -hide_banner \
         -loglevel info \
-        -reconnect 1 \
-        -reconnect_streamed 1 \
-        -reconnect_delay_max 5 \
-        -re \
-        -i "$url" \
+        "${MAIN_INPUT_ARGS[@]}" \
         -loop 1 -i "$DOT_MARKER" \
         "${AUDIO_INPUT_ARGS[@]}" \
+        "${PANEL_IMG_INPUT_ARGS[@]}" \
         -filter_complex "$filter" \
         -map "[final]" \
         -map "$AUDIO_MAP" \
@@ -1209,6 +1441,7 @@ run_video() {
         -ar 48000 \
         -ac 2 \
         -shortest \
+        "${EXTRA_OUTPUT_ARGS[@]}" \
         -f flv \
         "rtmp://a.rtmp.youtube.com/live2/${YOUTUBE_STREAM_KEY}"
         local exit_code=$?
