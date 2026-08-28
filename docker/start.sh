@@ -80,19 +80,18 @@ RTEXT_INSET=$((RIGHT_X0 + 33))         # right panel text left-inset
 PANEL_TEXT_W=$((PANEL_W - 66))         # usable text width inside a panel
 
 # ---------------------------------------------------------------
-# Center strip is now split into 4 stacked bands instead of one
-# full-height video:
-#   Row 1 - the live SDO video, still running continuously
-#   Row 2 - an animated "live solar wind" visualization
-#   Row 3 - a compact mission-status info block (text)
-#   Row 4 - a second animated visualization ("geomagnetic activity")
+# Center strip: 3 stacked bands, video kept large on top —
+#   Row 1 - the live SDO video (still running continuously, larger
+#           now than the old 4-row split)
+#   Row 2 - a compact mission-status info block (text)
+#   Row 3 - an animated "geomagnetic activity" visualization
 # ---------------------------------------------------------------
-CENTER_ROWS=4
-ROW_H=$((720 / CENTER_ROWS))     # 180
+VIDEO_ROW_H=340                  # video band height
+INFO_ROW_H=190                   # mission-status band height
+GRAPH_ROW_H=$((720 - VIDEO_ROW_H - INFO_ROW_H))  # 190 - remaining space
 ROW1_Y=0                         # video
-ROW2_Y=$((ROW_H))                # 180 - visualization 1
-ROW3_Y=$((ROW_H * 2))            # 360 - info
-ROW4_Y=$((ROW_H * 3))            # 540 - visualization 2
+ROW2_Y=$((VIDEO_ROW_H))          # 340 - info
+ROW3_Y=$((VIDEO_ROW_H + INFO_ROW_H))  # 530 - visualization
 MTEXT_INSET=$((CENTER_X0 + 30))  # center-strip text left-inset
 MVALUE_X=$((MTEXT_INSET + 150))  # x for the value half of a label:value row
 
@@ -802,80 +801,71 @@ prepare_video_content() {
     #########################################
     # Rebuild BASE_CHAIN for this video's content
     #########################################
-    # Fit the (typically square) SDO frame into ROW 1 only now (top
-    # quarter of the center strip): scale up so it fully covers
-    # CENTER_W x ROW_H, then crop the small excess off the sides. The
-    # video keeps running continuously in this band the whole time;
-    # rows 2-4 below it are new visualization/info bands.
+    # Fit the (typically square) SDO frame into row 1 — now a larger
+    # top band (VIDEO_ROW_H tall) instead of a quarter-height strip:
+    # scale up so it fully covers CENTER_W x VIDEO_ROW_H, then crop the
+    # small excess off the sides. The video keeps running continuously;
+    # below it are 2 bands now instead of 3 (the separate "live solar
+    # wind" chart was dropped — mission status + one activity graph).
     CHAIN="color=c=black:s=1280x720[canvas];"
-    CHAIN+="[0:v]scale=${CENTER_W}:${ROW_H}:force_original_aspect_ratio=increase,crop=${CENTER_W}:${ROW_H}[vidfit];"
+    CHAIN+="[0:v]scale=${CENTER_W}:${VIDEO_ROW_H}:force_original_aspect_ratio=increase,crop=${CENTER_W}:${VIDEO_ROW_H}[vidfit];"
     CHAIN+="[canvas][vidfit]overlay=${CENTER_X0}:${ROW1_Y}:shortest=1[base];"
 
     # Optional coordinate-based callout labels for this video, drawn
     # onto the Sun before the panels so the panels stay on top. Since
-    # the video now only occupies row 1 (y 0-${ROW_H}), a <basename>.labels.txt
-    # file's y coordinates should fall within that same range to land
-    # on the video — see build_labels_chain()'s own doc comment.
+    # the video occupies row 1 (y 0-${VIDEO_ROW_H}), a <basename>.labels.txt
+    # file's y coordinates should fall within that range to land on the
+    # video — see build_labels_chain()'s own doc comment.
     build_labels_chain "$url"
     CHAIN+="$LABELS_CHAIN"
 
-    # ---------------- Row 2: "LIVE SOLAR WIND" visualization ----------------
-    # Bordered "card" background (matches the side panels' framed look)
-    # with interior padding, so the bar chart has a bounded area instead
-    # of free-floating bars that can visually run into neighboring rows.
-    # (Cards also do the job the old plain divider lines did, so those
-    # were dropped in favor of this.)
+    # ---------------- Broadcast-style corner brackets on the video ----------------
+    # Small L-shaped accents at each corner of the video frame — the
+    # viewfinder/camera-framing motif used in documentary and news
+    # broadcast graphics — instead of a plain rectangle border.
+    local BR_L=26 BR_T=3 BR_M=10
+    local VX0=$CENTER_X0
+    local VX1=$((CENTER_X0 + CENTER_W))
+    local VY0=0
+    local VY1=$VIDEO_ROW_H
+    CHAIN+="${LABELS_OUT}drawbox=x=$((VX0 + BR_M)):y=$((VY0 + BR_M)):w=${BR_L}:h=${BR_T}:color=${GOLD}@0.9:t=fill[br1];"
+    CHAIN+="[br1]drawbox=x=$((VX0 + BR_M)):y=$((VY0 + BR_M)):w=${BR_T}:h=${BR_L}:color=${GOLD}@0.9:t=fill[br2];"
+    CHAIN+="[br2]drawbox=x=$((VX1 - BR_M - BR_L)):y=$((VY0 + BR_M)):w=${BR_L}:h=${BR_T}:color=${GOLD}@0.9:t=fill[br3];"
+    CHAIN+="[br3]drawbox=x=$((VX1 - BR_M - BR_T)):y=$((VY0 + BR_M)):w=${BR_T}:h=${BR_L}:color=${GOLD}@0.9:t=fill[br4];"
+    CHAIN+="[br4]drawbox=x=$((VX0 + BR_M)):y=$((VY1 - BR_M - BR_T)):w=${BR_L}:h=${BR_T}:color=${GOLD}@0.9:t=fill[br5];"
+    CHAIN+="[br5]drawbox=x=$((VX0 + BR_M)):y=$((VY1 - BR_M - BR_L)):w=${BR_T}:h=${BR_L}:color=${GOLD}@0.9:t=fill[br6];"
+    CHAIN+="[br6]drawbox=x=$((VX1 - BR_M - BR_L)):y=$((VY1 - BR_M - BR_T)):w=${BR_L}:h=${BR_T}:color=${GOLD}@0.9:t=fill[br7];"
+    CHAIN+="[br7]drawbox=x=$((VX1 - BR_M - BR_T)):y=$((VY1 - BR_M - BR_L)):w=${BR_T}:h=${BR_L}:color=${GOLD}@0.9:t=fill[br8];"
+    # Small "SDO LIVE FEED" caption in the bottom-left corner of the
+    # video, over a slim gradient-style scrim — a lower-third caption
+    # like a documentary/news broadcast uses, instead of bare footage.
+    CHAIN+="[br8]drawbox=x=${VX0}:y=$((VY1 - 34)):w=220:h=34:color=black@0.55:t=fill[brcap1];"
+    CHAIN+="[brcap1]drawtext=fontfile=${FONT}:text='SDO LIVE FEED':fontcolor=white@0.9:fontsize=13:x=$((VX0 + 14)):y=$((VY1 - 22)):${SHADOW}[brcap2];"
+    local prev="brcap2"
+
     local CARD_PAD=10
     local CARD_X0=$((CENTER_X0 + CARD_PAD))
     local CARD_W=$((CENTER_W - CARD_PAD * 2))
 
-    local CM2_Y0=$((ROW2_Y + CARD_PAD))
-    local CM2_Y1=$((ROW3_Y - CARD_PAD))
-    CHAIN+="${LABELS_OUT}drawbox=x=${CARD_X0}:y=${CM2_Y0}:w=${CARD_W}:h=$((CM2_Y1 - CM2_Y0)):color=black@0.22:t=fill[cm2card];"
-    CHAIN+="[cm2card]drawbox=x=${CARD_X0}:y=${CM2_Y0}:w=${CARD_W}:h=$((CM2_Y1 - CM2_Y0)):color=${GOLD}@0.3:t=1[cm2border];"
-
-    local CM2_LABEL_Y=$((CM2_Y0 + 20))
-    local CM2_BASE_Y=$((CM2_Y1 - 14))
-    local CM_BAR_COUNT=16
-    local CM_BAR_W=26
-    local CM_BAR_GAP=8
-    local CM_BAR_MINH=8
-    local CM_BAR_MAXH=$((CM2_BASE_Y - CM2_LABEL_Y - 20))
-
-    CHAIN+="[cm2border]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM2_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill:enable='lt(mod(t\,1.4)\,0.9)'[cm2a];"
-    CHAIN+="[cm2a]drawtext=fontfile=${FONT}:text='LIVE SOLAR WIND':fontcolor=white@0.75:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM2_LABEL_Y - 6))[cm2b];"
-    local prev="cm2b"
-    local ci cbx ch_expr cy_expr cnxt cnxt2
-    for ((ci = 0; ci < CM_BAR_COUNT; ci++)); do
-        cbx=$((MTEXT_INSET + ci * (CM_BAR_W + CM_BAR_GAP)))
-        ch_expr="clip(64+40*sin(2*PI*t/3.4+${ci}*0.5)+20*sin(2*PI*t/1.7+${ci}*0.85)\,${CM_BAR_MINH}\,${CM_BAR_MAXH})"
-        cy_expr="${CM2_BASE_Y}-(${ch_expr})"
-        cnxt="cm2bar${ci}"
-        cnxt2="cm2cap${ci}"
-        CHAIN+="[${prev}]drawbox=x=${cbx}:y='${cy_expr}':w=${CM_BAR_W}:h='${ch_expr}':color=${GOLD}@0.7:t=fill[${cnxt}];"
-        CHAIN+="[${cnxt}]drawbox=x=${cbx}:y='${cy_expr}':w=${CM_BAR_W}:h=2:color=${GOLD}:t=fill[${cnxt2}];"
-        prev="$cnxt2"
-    done
-    CHAIN+="[${prev}]drawbox=x=$((MTEXT_INSET - 4)):y=${CM2_BASE_Y}:w=$((CARD_W - 40)):h=1:color=white@0.2:t=fill[cm2base];"
-    prev="cm2base"
-
-    # ---------------- Row 3: mission-status info block ----------------
-    # Same card treatment as rows 2 and 4, with a two-column label:value
-    # layout mirroring the side panels' style instead of loose text.
-    local CM3_Y0=$((ROW3_Y + CARD_PAD))
-    local CM3_Y1=$((ROW4_Y - CARD_PAD))
+    # ---------------- Row 2: mission-status info block ----------------
+    # Bordered "card" background (matches the side panels' framed look),
+    # with a two-column label:value layout mirroring the side panels'
+    # style instead of loose text.
+    local CM3_Y0=$((ROW2_Y + CARD_PAD))
+    local CM3_Y1=$((ROW3_Y - CARD_PAD))
     CHAIN+="[${prev}]drawbox=x=${CARD_X0}:y=${CM3_Y0}:w=${CARD_W}:h=$((CM3_Y1 - CM3_Y0)):color=black@0.22:t=fill[cm3card];"
     CHAIN+="[cm3card]drawbox=x=${CARD_X0}:y=${CM3_Y0}:w=${CARD_W}:h=$((CM3_Y1 - CM3_Y0)):color=${GOLD}@0.3:t=1[cm3border];"
 
     local CM3_LABEL_Y=$((CM3_Y0 + 20))
-    local CM3_LINE1_Y=$((CM3_LABEL_Y + 28))
-    local CM3_LINE2_Y=$((CM3_LINE1_Y + 24))
-    local CM3_LINE3_Y=$((CM3_LINE2_Y + 24))
-    local CM3_LINE4_Y=$((CM3_LINE3_Y + 24))
-    local CM3_LINE5_Y=$((CM3_LINE4_Y + 24))
+    local CM3_LINE1_Y=$((CM3_LABEL_Y + 30))
+    local CM3_LINE2_Y=$((CM3_LINE1_Y + 26))
+    local CM3_LINE3_Y=$((CM3_LINE2_Y + 26))
+    local CM3_LINE4_Y=$((CM3_LINE3_Y + 26))
+    local CM3_LINE5_Y=$((CM3_LINE4_Y + 26))
 
     CHAIN+="[cm3border]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM3_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill[cm3z];"
-    CHAIN+="[cm3z]drawtext=fontfile=${FONT}:text='MISSION STATUS':fontcolor=${GOLD}@0.85:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM3_LABEL_Y - 6))[cm3a];"
+    CHAIN+="[cm3z]drawtext=fontfile=${FONT}:text='MISSION STATUS':fontcolor=${GOLD}@0.85:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM3_LABEL_Y - 6))[cm3z2];"
+    CHAIN+="[cm3z2]drawbox=x=${MTEXT_INSET}:y=$((CM3_LABEL_Y + 14)):w=$((CARD_W - 40)):h=1:color=white@0.15:t=fill[cm3a];"
     CHAIN+="[cm3a]drawtext=fontfile=${FONT}:text='INSTRUMENT':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE1_Y}[cm3b];"
     CHAIN+="[cm3b]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/instr_title.txt:fontcolor=white:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE1_Y}[cm3c];"
     CHAIN+="[cm3c]drawtext=fontfile=${FONT}:text='UTC TIME':fontcolor=white@0.55:fontsize=13:x=${MTEXT_INSET}:y=${CM3_LINE2_Y}[cm3d];"
@@ -889,13 +879,11 @@ prepare_video_content() {
     CHAIN+="[cm3k]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/xray_class.txt:reload=1:fontcolor=${GOLD}:fontsize=14:x=${MVALUE_X}:y=${CM3_LINE5_Y}[cm3final];"
     prev="cm3final"
 
-    # ---------------- Row 4: "GEOMAGNETIC ACTIVITY" visualization ----------------
-    # Deliberately styled differently from row 2's chart, not just a
-    # recolor: thinner, denser, two-tone gold/red bars (evoking aurora
-    # colors) on a red-bordered card, so the two visualizations don't
-    # read as the same graph repeated. Stops short of the bottom ticker
-    # (y=680) so it doesn't visually collide with it.
-    local CM4_Y0=$((ROW4_Y + CARD_PAD))
+    # ---------------- Row 3: "GEOMAGNETIC ACTIVITY" visualization ----------------
+    # Two-tone gold/red bars (evoking aurora colors) on a red-bordered
+    # card. Bounded to end at y=680 (CARD_PAD above the bottom ticker)
+    # so it never visually collides with it.
+    local CM4_Y0=$((ROW3_Y + CARD_PAD))
     local CM4_Y1=$((680 - CARD_PAD))
     CHAIN+="[${prev}]drawbox=x=${CARD_X0}:y=${CM4_Y0}:w=${CARD_W}:h=$((CM4_Y1 - CM4_Y0)):color=black@0.22:t=fill[cm4card];"
     CHAIN+="[cm4card]drawbox=x=${CARD_X0}:y=${CM4_Y0}:w=${CARD_W}:h=$((CM4_Y1 - CM4_Y0)):color=${RED}@0.3:t=1[cm4border];"
@@ -905,6 +893,7 @@ prepare_video_content() {
     local CM4_BAR_COUNT=26
     local CM4_BAR_W=14
     local CM4_BAR_GAP=6
+    local CM4_BAR_MINH=8
     local CM4_BAR_MAXH=$((CM4_BASE_Y - CM4_LABEL_Y - 20))
 
     CHAIN+="[cm4border]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM4_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[cm4a];"
@@ -913,7 +902,7 @@ prepare_video_content() {
     local di dbx dh_expr dy_expr dnxt dcolor
     for ((di = 0; di < CM4_BAR_COUNT; di++)); do
         dbx=$((MTEXT_INSET + di * (CM4_BAR_W + CM4_BAR_GAP)))
-        dh_expr="clip(58+34*sin(2*PI*t/2.6+${di}*0.6)+18*sin(2*PI*t/1.35+${di}*1.0)\,${CM_BAR_MINH}\,${CM4_BAR_MAXH})"
+        dh_expr="clip(58+34*sin(2*PI*t/2.6+${di}*0.6)+18*sin(2*PI*t/1.35+${di}*1.0)\,${CM4_BAR_MINH}\,${CM4_BAR_MAXH})"
         dy_expr="${CM4_BASE_Y}-(${dh_expr})"
         dnxt="cm4bar${di}"
         if (( di % 2 == 0 )); then dcolor="${GOLD}@0.65"; else dcolor="${RED}@0.55"; fi
