@@ -163,14 +163,13 @@ AUDIO_COUNTER=0   # persists across the whole run; advances one track per video
 #############################################
 # Panel decoration images (Earth / Sun stills)
 #
-# NOT part of the video rotation — these are
-# small static thumbnails placed into otherwise
-# empty space: below the left panel's solar-
-# activity graph, below the right panel's EUV
-# flux graph, and in the unused horizontal gap
-# to the right of the text in the center strip's
-# "MISSION STATUS" card. URLs are hardcoded
-# per request rather than env-configurable.
+# NOT part of the video rotation — this is a
+# single small static thumbnail placed into the
+# otherwise-empty horizontal gap to the right of
+# the text in the center strip's "MISSION
+# STATUS" card, rotating through all 4 images
+# across videos. URLs are hardcoded per request
+# rather than env-configurable.
 #
 # Downloaded once here (same reasoning as the
 # background-audio downloads above) and fed to
@@ -641,7 +640,7 @@ build_labels_chain() {
 
     local split_outs=""
     for ((i = 1; i <= n; i++)); do split_outs+="[dm${i}]"; done
-    LABELS_CHAIN+="[1:v]split=${n}${split_outs};"
+    LABELS_CHAIN+="[1:v]fps=30,split=${n}${split_outs};"
 
     local prev="base"
     for ((i = 0; i < n; i++)); do
@@ -714,7 +713,7 @@ build_labels_chain() {
         LABELS_CHAIN+="[${n4}]drawbox=x=${box_x}:y=${box_y}:w=${ACCENT_W}:h=${BOX_H}:color=${GOLD}:t=fill[${n5}];"
         LABELS_CHAIN+="[${n5}]drawbox=x=${box_x}:y=${box_y}:w=${box_w}:h=${BOX_H}:color=${GOLD}@0.5:t=1[${n6}];"
         LABELS_CHAIN+="[${n6}]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/label${idx}.txt:fontcolor=white:fontsize=${LABEL_FONTSIZE}:x=$((box_x + ACCENT_W + LABEL_PAD_L)):y=$((box_y + (BOX_H - LABEL_FONTSIZE) / 2)):${SHADOW}[${n7}];"
-        LABELS_CHAIN+="[${n7}][dm${idx}]overlay=x=$((x - 8)):y=$((y - 8))[${n1}];"
+        LABELS_CHAIN+="[${n7}][dm${idx}]overlay=x=$((x - 8)):y=$((y - 8)):shortest=1[${n1}];"
 
         prev="$n1"
     done
@@ -752,18 +751,16 @@ prepare_video_content() {
     local i idx
 
     #########################################
-    # Rotate which panel thumbnail lands in which slot (left/right/
-    # center) this video, so all 4 downloaded images get used across
-    # the rotation instead of the same 3 repeating forever. Sets
-    # globals (not local) because run_video() needs these paths after
-    # this function returns, to build the matching ffmpeg -i args.
+    # Rotate which of the 4 downloaded images appears in the Mission
+    # Status card this video (the only panel-thumbnail slot now — left
+    # and right panel thumbnails were removed). Sets a global (not
+    # local) because run_video() needs this path after this function
+    # returns, to build the matching ffmpeg -i arg.
     #########################################
     if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
-        LEFT_PANEL_IMG="${PANEL_IMAGE_LOCAL_FILES[$((PANEL_IMAGE_COUNTER % NUM_PANEL_IMAGES))]}"
-        RIGHT_PANEL_IMG="${PANEL_IMAGE_LOCAL_FILES[$(((PANEL_IMAGE_COUNTER + 1) % NUM_PANEL_IMAGES))]}"
-        MID_PANEL_IMG="${PANEL_IMAGE_LOCAL_FILES[$(((PANEL_IMAGE_COUNTER + 2) % NUM_PANEL_IMAGES))]}"
-        PANEL_IMAGE_COUNTER=$((PANEL_IMAGE_COUNTER + 3))
-        echo "Panel thumbnails this video — left: $LEFT_PANEL_IMG, right: $RIGHT_PANEL_IMG, center: $MID_PANEL_IMG"
+        MID_PANEL_IMG="${PANEL_IMAGE_LOCAL_FILES[$((PANEL_IMAGE_COUNTER % NUM_PANEL_IMAGES))]}"
+        PANEL_IMAGE_COUNTER=$((PANEL_IMAGE_COUNTER + 1))
+        echo "Mission Status panel thumbnail this video: $MID_PANEL_IMG"
     fi
 
     RAW_LINES=()
@@ -871,8 +868,21 @@ prepare_video_content() {
     # small excess off the sides. The video keeps running continuously;
     # below it are 2 bands now instead of 3 (the separate "live solar
     # wind" chart was dropped — mission status + one activity graph).
+    #
+    # fps=30 here (and on every other input that reaches this graph —
+    # the dot marker and the panel thumbnail) locks EVERY source to an
+    # identical 30fps timeline before anything is composited. Without
+    # this, a source video at some other native rate (25fps, 29.97fps,
+    # variable framerate, etc.) only gets resampled to 30fps at the
+    # very final output stage — by then, small PTS drift accumulated
+    # across a long real-time-paced (-re) stream can desync the
+    # overlay's internal frame accounting right as it's deciding
+    # exactly when the shortest input (this video) has ended, which can
+    # stall the whole ffmpeg process at 0:00 instead of exiting cleanly
+    # into the next video. Normalizing every input to 30fps at first
+    # entry removes that drift entirely.
     CHAIN="color=c=black:s=1280x720[canvas];"
-    CHAIN+="[0:v]scale=${CENTER_W}:${VIDEO_ROW_H}:force_original_aspect_ratio=increase,crop=${CENTER_W}:${VIDEO_ROW_H}[vidfit];"
+    CHAIN+="[0:v]fps=30,scale=${CENTER_W}:${VIDEO_ROW_H}:force_original_aspect_ratio=increase,crop=${CENTER_W}:${VIDEO_ROW_H}[vidfit];"
     CHAIN+="[canvas][vidfit]overlay=${CENTER_X0}:${ROW1_Y}:shortest=1[base];"
 
     # Optional coordinate-based callout labels for this video, drawn
@@ -951,24 +961,31 @@ prepare_video_content() {
     if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
         local MID_X0=$((MTEXT_INSET + 400))
         local MID_AVAIL_W=$(((CARD_X0 + CARD_W - 14) - MID_X0))
-        local MID_AVAIL_H=$(((CM3_Y1 - 14) - (CM3_LABEL_Y + 14)))
+        local MID_TOP=$((CM3_LABEL_Y + 14 + 14))
+        local MID_BOTTOM=$((CM3_Y1 - 16))
+        local MID_AVAIL_H=$((MID_BOTTOM - MID_TOP))
         if [ "$MID_AVAIL_W" -ge 90 ] && [ "$MID_AVAIL_H" -ge 90 ]; then
             local MTHUMB=$MID_AVAIL_W
             [ "$MID_AVAIL_H" -lt "$MTHUMB" ] && MTHUMB=$MID_AVAIL_H
             [ "$MTHUMB" -gt 130 ] && MTHUMB=130
             local MTX=$((MID_X0 + (MID_AVAIL_W - MTHUMB) / 2))
-            local MTY=$(((CM3_LABEL_Y + 14) + (MID_AVAIL_H - MTHUMB) / 2))
+            local MTY=$((MID_TOP + (MID_AVAIL_H - MTHUMB) / 2))
             CHAIN+="[${prev}]drawbox=x=$((MTX - 4)):y=$((MTY - 4)):w=$((MTHUMB + 8)):h=$((MTHUMB + 8)):color=black@0.6:t=fill[mthumbbg];"
             CHAIN+="[mthumbbg]drawbox=x=$((MTX - 4)):y=$((MTY - 4)):w=$((MTHUMB + 8)):h=$((MTHUMB + 8)):color=${GOLD}@0.5:t=1[mthumbborder];"
-            CHAIN+="[5:v]scale=${MTHUMB}:${MTHUMB}:force_original_aspect_ratio=increase,crop=${MTHUMB}:${MTHUMB}[mimg];"
-            CHAIN+="[mthumbborder][mimg]overlay=x=${MTX}:y=${MTY}[mthumbfinal];"
+            CHAIN+="[3:v]fps=30,scale=${MTHUMB}:${MTHUMB}:force_original_aspect_ratio=increase,crop=${MTHUMB}:${MTHUMB}[mimg];"
+            CHAIN+="[mthumbborder][mimg]overlay=x=${MTX}:y=${MTY}:shortest=1[mthumbfinal];"
             prev="mthumbfinal"
         fi
     fi
 
     # ---------------- Row 3: "GEOMAGNETIC ACTIVITY" visualization ----------------
-    # Two-tone gold/red bars (evoking aurora colors) on a red-bordered
-    # card. Bounded to end at y=680 (CARD_PAD above the bottom ticker)
+    # Line chart (was a bar chart) on a red-bordered card. Drawn as many
+    # thin, contiguous segments sampled densely along a smoothly-varying
+    # curve (small phase step between adjacent samples, unlike the old
+    # per-bar phase jumps) — with no gaps between segments this reads as
+    # a continuous traced line rather than individual bars. Colored in
+    # gold/red blocks (aurora tones), matching the rest of the section's
+    # style. Bounded to end at y=680 (CARD_PAD above the bottom ticker)
     # so it never visually collides with it.
     local CM4_Y0=$((ROW3_Y + CARD_PAD))
     local CM4_Y1=$((680 - CARD_PAD))
@@ -977,23 +994,27 @@ prepare_video_content() {
 
     local CM4_LABEL_Y=$((CM4_Y0 + 20))
     local CM4_BASE_Y=$((CM4_Y1 - 14))
-    local CM4_BAR_COUNT=26
-    local CM4_BAR_W=14
-    local CM4_BAR_GAP=6
-    local CM4_BAR_MINH=8
-    local CM4_BAR_MAXH=$((CM4_BASE_Y - CM4_LABEL_Y - 20))
+    local CM4_LINE_MINH=8
+    local CM4_LINE_MAXH=$((CM4_BASE_Y - CM4_LABEL_Y - 20))
+    local CM4_LINE_START_X=$((MTEXT_INSET - 4))
+    local CM4_LINE_WIDTH=$((CARD_W - 40))
+    local CM4_STEP=6
+    local CM4_LINE_COUNT=$((CM4_LINE_WIDTH / CM4_STEP))
+    local CM4_STROKE_H=4
+    local CM4_BLOCK_SIZE=12
 
     CHAIN+="[cm4border]drawbox=x=$((MTEXT_INSET - 2)):y=$((CM4_LABEL_Y - 2)):w=6:h=6:color=${RED}:t=fill:enable='lt(mod(t\,1.2)\,0.75)'[cm4a];"
     CHAIN+="[cm4a]drawtext=fontfile=${FONT}:text='GEOMAGNETIC ACTIVITY':fontcolor=white@0.75:fontsize=13:x=$((MTEXT_INSET + 14)):y=$((CM4_LABEL_Y - 6))[cm4b];"
     prev="cm4b"
-    local di dbx dh_expr dy_expr dnxt dcolor
-    for ((di = 0; di < CM4_BAR_COUNT; di++)); do
-        dbx=$((MTEXT_INSET + di * (CM4_BAR_W + CM4_BAR_GAP)))
-        dh_expr="clip(58+34*sin(2*PI*t/2.6+${di}*0.6)+18*sin(2*PI*t/1.35+${di}*1.0)\,${CM4_BAR_MINH}\,${CM4_BAR_MAXH})"
+    local di dbx dh_expr dy_expr dnxt dcolor dblock
+    for ((di = 0; di < CM4_LINE_COUNT; di++)); do
+        dbx=$((CM4_LINE_START_X + di * CM4_STEP))
+        dh_expr="clip(58+34*sin(2*PI*t/2.6+${di}*0.12)+18*sin(2*PI*t/1.35+${di}*0.19)\,${CM4_LINE_MINH}\,${CM4_LINE_MAXH})"
         dy_expr="${CM4_BASE_Y}-(${dh_expr})"
-        dnxt="cm4bar${di}"
-        if (( di % 2 == 0 )); then dcolor="${GOLD}@0.65"; else dcolor="${RED}@0.55"; fi
-        CHAIN+="[${prev}]drawbox=x=${dbx}:y='${dy_expr}':w=${CM4_BAR_W}:h='${dh_expr}':color=${dcolor}:t=fill[${dnxt}];"
+        dnxt="cm4ln${di}"
+        dblock=$((di / CM4_BLOCK_SIZE))
+        if (( dblock % 2 == 0 )); then dcolor="${GOLD}@0.9"; else dcolor="${RED}@0.85"; fi
+        CHAIN+="[${prev}]drawbox=x=${dbx}:y='${dy_expr}':w=${CM4_STEP}:h=${CM4_STROKE_H}:color=${dcolor}:t=fill[${dnxt}];"
         prev="$dnxt"
     done
     CHAIN+="[${prev}]drawbox=x=$((MTEXT_INSET - 4)):y=${CM4_BASE_Y}:w=$((CARD_W - 40)):h=1:color=white@0.2:t=fill[cm4base];"
@@ -1087,29 +1108,6 @@ prepare_video_content() {
     CHAIN+="[${prev}]drawbox=x=${TEXT_INSET}:y=${GRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[sabase];"
     prev="sabase"
 
-    # ---------------- Left panel: framed Earth/Sun thumbnail ----------------
-    # Placed in the vacant space below the solar-activity graph — only
-    # drawn when there's actually enough room left, since a long
-    # headline wraps to more lines and pushes the graph (and this gap)
-    # down; if a video's headline eats too much of that margin, the
-    # thumbnail is simply skipped for that video rather than overlap.
-    if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
-        local LTOP=$((GRAPH_BASE_Y + 15))
-        local LAVAIL_H=$((700 - LTOP))
-        if [ "$LAVAIL_H" -ge 90 ]; then
-            local LTHUMB=$LAVAIL_H
-            [ "$LTHUMB" -gt 140 ] && LTHUMB=140
-            [ "$LTHUMB" -gt "$PANEL_TEXT_W" ] && LTHUMB=$PANEL_TEXT_W
-            local LTX=$((TEXT_INSET + (PANEL_TEXT_W - LTHUMB) / 2))
-            local LTY=$LTOP
-            CHAIN+="[${prev}]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=black@0.6:t=fill[lthumbbg];"
-            CHAIN+="[lthumbbg]drawbox=x=$((LTX - 4)):y=$((LTY - 4)):w=$((LTHUMB + 8)):h=$((LTHUMB + 8)):color=${GOLD}@0.5:t=1[lthumbborder];"
-            CHAIN+="[3:v]scale=${LTHUMB}:${LTHUMB}:force_original_aspect_ratio=increase,crop=${LTHUMB}:${LTHUMB}[limg];"
-            CHAIN+="[lthumbborder][limg]overlay=x=${LTX}:y=${LTY}[lthumbfinal];"
-            prev="lthumbfinal"
-        fi
-    fi
-
     # ---------------- Right panel: stats + instrument + facts ----------------
     CHAIN+="[${prev}]drawbox=x=${RIGHT_X0}:y=0:w=${PANEL_W}:h=720:color=black@0.92:t=fill[r1];"
     CHAIN+="[r1]drawbox=x=$((RIGHT_X0 - 3)):y=0:w=3:h=720:color=${GOLD}@0.75:t=fill[r2];"
@@ -1189,26 +1187,6 @@ prepare_video_content() {
     done
     CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RGRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[rgbase];"
     prev="rgbase"
-
-    # ---------------- Right panel: framed Earth/Sun thumbnail ----------------
-    # Same idea and same skip-if-too-tight logic as the left panel's
-    # thumbnail, in the space below the EUV flux graph.
-    if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
-        local RTOP=$((RGRAPH_BASE_Y + 15))
-        local RAVAIL_H=$((700 - RTOP))
-        if [ "$RAVAIL_H" -ge 90 ]; then
-            local RTHUMB=$RAVAIL_H
-            [ "$RTHUMB" -gt 140 ] && RTHUMB=140
-            [ "$RTHUMB" -gt "$PANEL_TEXT_W" ] && RTHUMB=$PANEL_TEXT_W
-            local RTX=$((RTEXT_INSET + (PANEL_TEXT_W - RTHUMB) / 2))
-            local RTY=$RTOP
-            CHAIN+="[${prev}]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=black@0.6:t=fill[rthumbbg];"
-            CHAIN+="[rthumbbg]drawbox=x=$((RTX - 4)):y=$((RTY - 4)):w=$((RTHUMB + 8)):h=$((RTHUMB + 8)):color=${GOLD}@0.5:t=1[rthumbborder];"
-            CHAIN+="[4:v]scale=${RTHUMB}:${RTHUMB}:force_original_aspect_ratio=increase,crop=${RTHUMB}:${RTHUMB}[rimg];"
-            CHAIN+="[rthumbborder][rimg]overlay=x=${RTX}:y=${RTY}[rthumbfinal];"
-            prev="rthumbfinal"
-        fi
-    fi
 
     BASE_CHAIN="$CHAIN"
     FACT_END="$prev"
@@ -1371,20 +1349,16 @@ run_video() {
         AUDIO_INPUT_ARGS=(-f lavfi -i "anullsrc=r=48000:cl=stereo")
     fi
 
-    # Panel-thumbnail inputs (indices 3, 4, 5 — right after 0:main,
-    # 1:dot-marker, 2:audio). Fixed -framerate 30 per slot, same reason
-    # as the main image-slide input above: a steady, explicit 30fps
-    # instead of a decoder default. Only added at all when downloads
-    # succeeded at startup; the filter graph itself was built with the
-    # matching PANEL_IMAGES_AVAILABLE check, so the two always agree on
-    # whether inputs 3/4/5 exist.
+    # Panel-thumbnail input (index 3 — right after 0:main, 1:dot-marker,
+    # 2:audio). Fixed -framerate 30, same reason as the main image-slide
+    # input above: a steady, explicit 30fps instead of a decoder
+    # default. Only added at all when downloads succeeded at startup;
+    # the filter graph itself was built with the matching
+    # PANEL_IMAGES_AVAILABLE check, so the two always agree on whether
+    # input 3 exists.
     local PANEL_IMG_INPUT_ARGS=()
     if [ "$PANEL_IMAGES_AVAILABLE" = true ]; then
-        PANEL_IMG_INPUT_ARGS=(
-            -loop 1 -framerate 30 -i "$LEFT_PANEL_IMG"
-            -loop 1 -framerate 30 -i "$RIGHT_PANEL_IMG"
-            -loop 1 -framerate 30 -i "$MID_PANEL_IMG"
-        )
+        PANEL_IMG_INPUT_ARGS=(-loop 1 -framerate 30 -i "$MID_PANEL_IMG")
     fi
 
     while [ "$attempt" -le "$MAX_RETRIES" ]; do
@@ -1415,7 +1389,7 @@ run_video() {
         -hide_banner \
         -loglevel info \
         "${MAIN_INPUT_ARGS[@]}" \
-        -loop 1 -i "$DOT_MARKER" \
+        -loop 1 -framerate 30 -i "$DOT_MARKER" \
         "${AUDIO_INPUT_ARGS[@]}" \
         "${PANEL_IMG_INPUT_ARGS[@]}" \
         -filter_complex "$filter" \
