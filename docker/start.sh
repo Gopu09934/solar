@@ -1152,7 +1152,6 @@ prepare_video_content() {
     local RREAD_LINE3_Y=$((RREAD_LINE2_Y + 20))
     local RREAD_LINE4_Y=$((RREAD_LINE3_Y + 20))
     local RGRAPH_LABEL_Y=$((RREAD_LINE4_Y + 30))
-    local RGRAPH_BASE_Y=$((RGRAPH_LABEL_Y + 150))
 
     CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RREAD_DIV_Y}:w=${PANEL_TEXT_W}:h=2:color=white@0.15:t=fill[rr0];"
     CHAIN+="[rr0]drawtext=fontfile=${FONT}:text='SPACE WEATHER (NOAA)':fontcolor=${GOLD}@0.85:fontsize=12:x=${RTEXT_INSET}:y=${RREAD_LABEL_Y}[rr0b];"
@@ -1171,21 +1170,44 @@ prepare_video_content() {
     CHAIN+="[rg1b]drawtext=fontfile=${FONT}:textfile=${ASSET_DIR}/xray_class.txt:reload=1:fontcolor=${GOLD}:fontsize=16:x=${RTEXT_INSET}:y=$((RGRAPH_LABEL_Y + 10)):${SHADOW}[rg2];"
     prev="rg2"
 
-    local RBAR_COUNT=14
-    local RBAR_W=13
-    local RBAR_GAP=6
-    local RBAR_MINH=8
-    local RBAR_MAXH=100
-    local ri rbx rh_expr ry_expr rnxt
-    for ((ri = 0; ri < RBAR_COUNT; ri++)); do
-        rbx=$((RTEXT_INSET + ri * (RBAR_W + RBAR_GAP)))
-        rh_expr="clip(55+34*sin(2*PI*t/2.6+${ri}*0.7)+20*sin(2*PI*t/1.3+${ri}*1.1)\,${RBAR_MINH}\,${RBAR_MAXH})"
-        ry_expr="${RGRAPH_BASE_Y}-(${rh_expr})"
-        rnxt="rgbar${ri}"
-        CHAIN+="[${prev}]drawbox=x=${rbx}:y='${ry_expr}':w=${RBAR_W}:h='${rh_expr}':color=${GOLD}@0.75:t=fill[${rnxt}];"
-        prev="$rnxt"
-    done
-    CHAIN+="[${prev}]drawbox=x=${RTEXT_INSET}:y=${RGRAPH_BASE_Y}:w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[rgbase];"
+    # ---------------- Right panel: activity-level pie chart ----------------
+    # Animated pie chart (was a bar-equalizer graph) drawn procedurally
+    # with geq: a filled wedge whose angle tracks a smooth, live-looking
+    # percentage — same sine-driven "fake live" approach as the other
+    # gauges in this script (e.g. SOLAR ACTIVITY). geq needs its own
+    # independent color-source input (like "canvas" at the very top of
+    # this whole chain) since it isn't derived from the video, and per
+    # the shortest=1 fix used elsewhere in this script, that overlay
+    # MUST use shortest=1 or the whole stream can hang forever once the
+    # video ends (this exact bug class was fixed for the panel
+    # thumbnail and the coordinate-label dot marker earlier).
+    local PIE_LABEL_Y=$((RGRAPH_LABEL_Y + 40))
+    local PIE_TOP=$((PIE_LABEL_Y + 18))
+    local PIE_AVAIL_H=$((700 - PIE_TOP))
+    local PIE_SIZE=$PIE_AVAIL_H
+    [ "$PIE_SIZE" -gt "$PANEL_TEXT_W" ] && PIE_SIZE=$PANEL_TEXT_W
+    [ "$PIE_SIZE" -gt 140 ] && PIE_SIZE=140
+    local PIE_CX=$((PIE_SIZE / 2))
+    local PIE_CY=$((PIE_SIZE / 2))
+    local PIE_R=$((PIE_SIZE / 2 - 4))
+    local PIE_X=$((RTEXT_INSET + (PANEL_TEXT_W - PIE_SIZE) / 2))
+    local PIE_Y=$PIE_TOP
+
+    local PIE_DIST="hypot(X-${PIE_CX}\,Y-${PIE_CY})"
+    local PIE_THETA="mod(atan2(Y-${PIE_CY}\,X-${PIE_CX})+PI/2+2*PI\,2*PI)"
+    local PIE_FILL_ANGLE="(2*PI*(50+35*sin(2*PI*T/12))/100)"
+    local PIE_R_EXPR="if(lte(${PIE_DIST}\,${PIE_R})\,if(lte(${PIE_THETA}\,${PIE_FILL_ANGLE})\,${GOLD_R}\,45)\,0)"
+    local PIE_G_EXPR="if(lte(${PIE_DIST}\,${PIE_R})\,if(lte(${PIE_THETA}\,${PIE_FILL_ANGLE})\,${GOLD_G}\,45)\,0)"
+    local PIE_B_EXPR="if(lte(${PIE_DIST}\,${PIE_R})\,if(lte(${PIE_THETA}\,${PIE_FILL_ANGLE})\,${GOLD_B}\,45)\,0)"
+    local PIE_A_EXPR="if(lte(${PIE_DIST}\,${PIE_R})\,255\,0)"
+
+    CHAIN+="[${prev}]drawbox=x=$((RTEXT_INSET - 2)):y=$((PIE_LABEL_Y - 2)):w=6:h=6:color=${GOLD}:t=fill[rgp1];"
+    CHAIN+="[rgp1]drawtext=fontfile=${FONT}:text='ACTIVITY LEVEL':fontcolor=white@0.55:fontsize=11:x=$((RTEXT_INSET + 14)):y=$((PIE_LABEL_Y - 8))[rgp2];"
+    CHAIN+="color=c=black@0:s=${PIE_SIZE}x${PIE_SIZE}[pie_src];"
+    CHAIN+="[pie_src]format=rgba,geq=r='${PIE_R_EXPR}':g='${PIE_G_EXPR}':b='${PIE_B_EXPR}':a='${PIE_A_EXPR}'[pie_img];"
+    CHAIN+="[rgp2][pie_img]overlay=x=${PIE_X}:y=${PIE_Y}:shortest=1[rgp3];"
+    CHAIN+="[rgp3]drawtext=fontfile=${FONT}:text='%{eif\:50+35*sin(2*PI*t/12)\:d} PCT':fontcolor=white:fontsize=18:x=$((PIE_X + PIE_SIZE / 2 - 34)):y=$((PIE_Y + PIE_SIZE / 2 - 9)):${SHADOW}[rgp4];"
+    CHAIN+="[rgp4]drawbox=x=${RTEXT_INSET}:y=$((PIE_Y + PIE_SIZE + 15)):w=${PANEL_TEXT_W}:h=1:color=white@0.2:t=fill[rgbase];"
     prev="rgbase"
 
     BASE_CHAIN="$CHAIN"
